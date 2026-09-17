@@ -810,13 +810,11 @@ var STATUS_KEY = "plan-mode";
 var PLAN_WIDGET_KEY = "plan-mode-plan";
 var BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 function updatePlanModeUi(ctx, state, toolSummary) {
-  ctx.ui.setStatus(STATUS_KEY, formatStatus(state));
+  ctx.ui.setStatus(STATUS_KEY, formatStatus(state, ctx));
   void toolSummary;
   let lines;
   if (state.enabled && state.latestPlan) {
     lines = ["Plan ready \u2014 /plan to implement, save, revise, or exit"];
-  } else if (state.enabled) {
-    lines = ["Plan mode \u2014 /plan for tools and options"];
   } else if (state.savedPlan) {
     lines = ["Plan saved \u2014 /plan to show, implement, or clear"];
   } else if (state.activeImplementation) {
@@ -903,14 +901,17 @@ function publishPlanModeWidget(ctx, lines) {
     }
   }));
 }
-function formatStatus(state) {
+function formatStatus(state, ctx) {
+  let text;
   if (state.enabled) {
-    if (state.awaitingAction || state.latestPlan) return "plan ready";
-    return "plan active";
+    text = state.awaitingAction || state.latestPlan ? "plan ready" : "plan active";
+  } else if (state.savedPlan) {
+    text = "plan saved";
+  } else if (state.activeImplementation) {
+    text = "plan implementing";
   }
-  if (state.savedPlan) return "plan saved";
-  if (state.activeImplementation) return "plan implementing";
-  return void 0;
+  if (!text) return void 0;
+  return ctx.ui.theme.fg("accent", text);
 }
 
 // src/required-tools.ts
