@@ -817,8 +817,6 @@ function updatePlanModeUi(ctx, state, toolSummary) {
     lines = ["Plan ready \u2014 /plan to implement, save, revise, or exit"];
   } else if (state.savedPlan) {
     lines = ["Plan saved \u2014 /plan to show, implement, or clear"];
-  } else if (state.activeImplementation) {
-    lines = ["Implementing plan \u2014 /plan to show, replace, or clear"];
   }
   publishPlanModeWidget(ctx, lines);
 }
