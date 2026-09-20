@@ -126,42 +126,6 @@ function createFinalizationRequestCoordinator() {
   };
 }
 
-// src/fresh-handoff-coordinator.ts
-var defaultDependencies = {
-  schedule: (callback) => setTimeout(callback, 0),
-  cancel: (handle) => clearTimeout(handle)
-};
-function createDeferredFreshHandoffCoordinator(dependencies = defaultDependencies) {
-  let generation = 0;
-  let pending;
-  const cancel = () => {
-    generation += 1;
-    if (!pending) return;
-    dependencies.cancel(pending.handle);
-    pending = void 0;
-  };
-  return {
-    schedule(run, onError) {
-      cancel();
-      const taskGeneration = generation;
-      const handle = dependencies.schedule(() => {
-        if (pending?.generation !== taskGeneration || generation !== taskGeneration) return;
-        pending = void 0;
-        const isCurrent = () => generation === taskGeneration;
-        void Promise.resolve().then(() => run(isCurrent)).catch((error) => {
-          if (!isCurrent()) return;
-          try {
-            onError(error);
-          } catch {
-          }
-        });
-      });
-      pending = { generation: taskGeneration, handle };
-    },
-    cancel
-  };
-}
-
 // src/fresh-implementation.ts
 import { randomUUID } from "node:crypto";
 import { stripVTControlCharacters } from "node:util";
@@ -706,10 +670,10 @@ function createPlanActionController(options) {
       ...thinkingLevel ? { thinkingLevel } : {}
     };
   };
-  const freshAction = (ctx, lifecycle, signal, runtime, timing) => {
+  const freshAction = (ctx, lifecycle, signal, runtime) => {
     if (signal.aborted) return;
-    const isCurrent = timing === "after-settled" ? lifecycle.isCurrent : () => lifecycle.isCurrent() && !signal.aborted;
-    return options.implementFresh(ctx, isCurrent, runtime, timing);
+    const isCurrent = () => lifecycle.isCurrent() && !signal.aborted;
+    return options.implementFresh(ctx, isCurrent, runtime);
   };
   return {
     async showSaved(ctx) {
@@ -725,7 +689,7 @@ function createPlanActionController(options) {
         isCurrent: lifecycle.isCurrent,
         show: () => options.show(ctx),
         implementHere: () => options.implementHere(ctx),
-        implementFresh: (signal) => freshAction(ctx, lifecycle, signal, effectiveDefaults(ctx), "immediate"),
+        implementFresh: (signal) => freshAction(ctx, lifecycle, signal, effectiveDefaults(ctx)),
         exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
         settings: (signal) => options.settings(ctx, signal, lifecycle.isCurrent),
         clear: () => options.clearSaved(ctx)
@@ -751,29 +715,10 @@ function createPlanActionController(options) {
         show: () => options.show(ctx),
         finalize: () => options.finalize(ctx),
         implementHere: () => options.implementHere(ctx),
-        implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime, "immediate"),
+        implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
         exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
         save: () => options.save(ctx),
         stay: () => options.stay(ctx),
-        exit: () => options.exitReady(ctx)
-      });
-    },
-    async showReady(ctx) {
-      const lifecycle = options.captureLifecycle();
-      if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
-      const ui = await options.loadInteractiveUi();
-      if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
-      await ui.showReadyPlanMenu(ctx, {
-        ...lifecycle,
-        planThinkingLevel: options.getThinkingLevel(),
-        implementationDefaults: configuredDefaults(),
-        implementationOutcome: options.implementationOutcome,
-        getExportDestination: () => options.getExportDestination(ctx),
-        implementHere: () => options.implementHere(ctx),
-        implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime, "after-settled"),
-        exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
-        save: () => options.save(ctx),
-        stay: () => void 0,
         exit: () => options.exitReady(ctx)
       });
     }
@@ -1055,9 +1000,6 @@ function planMode(pi, dependencies = {}) {
   let publishedContractMode;
   let modeContractsRelevant = false;
   let readyPresentationIntent;
-  let latestCommandContext;
-  let stagedFreshImplementation;
-  const deferredFreshHandoff = createDeferredFreshHandoffCoordinator();
   let nextReadyPresentationNonce = 0;
   let menuGeneration = 0;
   let workflowGeneration = 0;
@@ -1161,7 +1103,6 @@ function planMode(pi, dependencies = {}) {
     description: "Enter or manage Codex-like Plan mode",
     getArgumentCompletions: completePlanArguments,
     handler: async (args, ctx) => {
-      latestCommandContext = ctx;
       const prompt = args.trim();
       const command = prompt.toLowerCase();
       if (command === "start") {
@@ -1330,7 +1271,6 @@ function planMode(pi, dependencies = {}) {
     }
   };
   pi.on("session_start", async (event, ctx) => {
-    cancelDeferredFreshImplementation();
     const generation = ++menuGeneration;
     finalizationRequest.reset();
     currentSession = ctx.sessionManager;
@@ -1343,7 +1283,6 @@ function planMode(pi, dependencies = {}) {
     menuController.abort(new DOMException("Plan-mode session replaced", "AbortError"));
     menuController = new AbortController();
     readyPresentationIntent = void 0;
-    latestCommandContext = void 0;
     workflowAllowedToolNames = void 0;
     pendingWorkflowToolPolicy = void 0;
     implementationRetention.reset();
@@ -1383,13 +1322,11 @@ function planMode(pi, dependencies = {}) {
     return { cancel: true };
   });
   pi.on("session_tree", async (_event, ctx) => {
-    cancelDeferredFreshImplementation();
     advanceWorkflowGeneration();
     menuGeneration += 1;
     menuController.abort(new DOMException("Plan-mode tree branch changed", "AbortError"));
     menuController = new AbortController();
     readyPresentationIntent = void 0;
-    latestCommandContext = void 0;
     pendingRuntimeAdmissionSession = void 0;
     queuedRuntimeAdmissionInputs = [];
     implementationRetention.reset();
@@ -1415,7 +1352,6 @@ function planMode(pi, dependencies = {}) {
     }
   });
   pi.on("session_shutdown", async (_event, ctx) => {
-    cancelDeferredFreshImplementation();
     const shutdownSession = ctx.sessionManager;
     const runtimeApplication = activeImplementationRuntimeApplication?.sessionManager === shutdownSession && activeImplementationRuntimeApplication.drainOnShutdown ? activeImplementationRuntimeApplication : void 0;
     const queuedInputs = takeQueuedRuntimeAdmissionInputs(shutdownSession);
@@ -1434,7 +1370,6 @@ function planMode(pi, dependencies = {}) {
     menuGeneration += 1;
     menuController.abort(new DOMException("Plan-mode session shut down", "AbortError"));
     readyPresentationIntent = void 0;
-    latestCommandContext = void 0;
     refreshStateBeforeFirstAgentStart = false;
     pendingRuntimeAdmissionSession = void 0;
     queuedRuntimeAdmissionInputs = [];
@@ -1581,7 +1516,6 @@ Blocked command: ${blocked}`
     refreshStateForFirstPrompt(ctx);
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
     if (state.latestPlan || state.awaitingAction) {
-      cancelDeferredFreshImplementation();
       readyPresentationIntent = void 0;
       state = {
         ...state,
@@ -1629,28 +1563,19 @@ Blocked command: ${blocked}`
     if (!intent || !readyPresentationIsCurrent(intent)) return;
     if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
     readyPresentationIntent = void 0;
-    stagedFreshImplementation = void 0;
+    if (intent.source !== "legacy_proposed_plan") return;
     try {
-      if (intent.source === "legacy_proposed_plan") {
-        pi.sendMessage(
-          {
-            customType: PROPOSED_PLAN_MESSAGE_TYPE,
-            content: `**Proposed Plan**
+      pi.sendMessage(
+        {
+          customType: PROPOSED_PLAN_MESSAGE_TYPE,
+          content: `**Proposed Plan**
 
 ${intent.plan}`,
-            display: true
-          },
-          { triggerTurn: false }
-        );
-      }
-      if (ctx.hasUI && completedPlanIsCurrent(intent)) {
-        await planActions.showReady(latestCommandContext ?? ctx);
-      }
-      const request = stagedFreshImplementation;
-      stagedFreshImplementation = void 0;
-      if (request) armDeferredFreshImplementation(request);
+          display: true
+        },
+        { triggerTurn: false }
+      );
     } catch (error) {
-      stagedFreshImplementation = void 0;
       if (!isStaleExtensionContextError(error)) throw error;
     }
   });
@@ -1855,75 +1780,14 @@ ${intent.plan}`,
     releaseWorkflowOwner();
     ctx.ui.notify("Plan saved for later. Plan mode disabled.", "info");
   }
-  async function startFreshImplementation(ctx, menuIsCurrent, runtime, timing) {
-    const retention = configuredImplementationPlanRetention(settings);
-    if (timing === "immediate") {
-      await startFreshImplementationFromState(ctx, {
-        getState: () => state,
-        menuIsCurrent,
-        retention,
-        stateEntryType: STATE_ENTRY_TYPE,
-        runtime
-      });
-      return;
-    }
-    const initialState = state;
-    const savedPlan = initialState.enabled ? void 0 : initialState.savedPlan;
-    const plan = (initialState.enabled ? initialState.latestPlan : savedPlan?.plan)?.trim();
-    const source = initialState.enabled ? initialState.latestPlanSource : savedPlan?.source;
-    if (!plan || !source || !menuIsCurrent()) return;
-    stagedFreshImplementation = {
-      ctx,
-      sourceSession: ctx.sessionManager,
-      menuGeneration,
-      workflowGeneration,
-      workflowOwner,
-      enabled: initialState.enabled,
-      plan,
-      source,
-      savedPlan,
-      retention,
-      runtime: runtime ? {
-        ...runtime.model ? { model: { ...runtime.model } } : {},
-        ...runtime.thinkingLevel ? { thinkingLevel: runtime.thinkingLevel } : {}
-      } : void 0,
-      menuIsCurrent
-    };
-  }
-  function armDeferredFreshImplementation(request) {
-    deferredFreshHandoff.schedule(
-      async (taskIsCurrent) => {
-        const isCurrent = () => taskIsCurrent() && deferredFreshImplementationIsCurrent(request);
-        if (!isCurrent()) return;
-        await startFreshImplementationFromState(request.ctx, {
-          getState: () => state,
-          menuIsCurrent: isCurrent,
-          retention: request.retention,
-          stateEntryType: STATE_ENTRY_TYPE,
-          runtime: request.runtime
-        });
-      },
-      (error) => {
-        if (!deferredFreshImplementationIsCurrent(request)) return;
-        try {
-          request.ctx.ui.notify(
-            `Unable to start the deferred fresh implementation: ${terminalErrorDetail(error)}`,
-            "error"
-          );
-        } catch {
-        }
-      }
-    );
-  }
-  function deferredFreshImplementationIsCurrent(request) {
-    if (currentSession !== request.sourceSession || menuGeneration !== request.menuGeneration || workflowGeneration !== request.workflowGeneration || workflowOwner !== request.workflowOwner || !request.menuIsCurrent() || state.enabled !== request.enabled) {
-      return false;
-    }
-    return request.enabled ? workflowMutex.isOwner(request.workflowOwner) && state.latestPlan === request.plan && state.latestPlanSource === request.source : state.savedPlan === request.savedPlan;
-  }
-  function cancelDeferredFreshImplementation() {
-    stagedFreshImplementation = void 0;
-    deferredFreshHandoff.cancel();
+  async function startFreshImplementation(ctx, menuIsCurrent, runtime) {
+    await startFreshImplementationFromState(ctx, {
+      getState: () => state,
+      menuIsCurrent,
+      retention: configuredImplementationPlanRetention(settings),
+      stateEntryType: STATE_ENTRY_TYPE,
+      runtime
+    });
   }
   async function startImplementation(ctx) {
     const savedPlan = state.enabled ? void 0 : state.savedPlan;
@@ -2138,7 +2002,6 @@ ${intent.plan}`,
     return false;
   }
   function advanceWorkflowGeneration() {
-    cancelDeferredFreshImplementation();
     workflowGeneration += 1;
     pendingWorkflowToolPolicy = void 0;
     finalizationRequest.reset();
@@ -2652,11 +2515,6 @@ ${intent.plan}`,
   function terminalModelReference(model) {
     const safe = safeTerminalText(`${model.provider}/${model.modelId}`) || "(unnamed model)";
     return safe.length > 160 ? `${safe.slice(0, 159)}\u2026` : safe;
-  }
-  function terminalErrorDetail(error) {
-    const safe = safeTerminalText(error instanceof Error ? error.message : String(error));
-    if (!safe) return "unknown error";
-    return safe.length > 500 ? `${safe.slice(0, 499)}\u2026` : safe;
   }
   function safeTerminalText(value) {
     return [...stripVTControlCharacters2(value)].map((character) => {
