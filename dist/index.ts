@@ -695,6 +695,29 @@ function createPlanActionController(options) {
         clear: () => options.clearSaved(ctx)
       });
     },
+    async showReady(ctx, readyIsCurrent) {
+      if (!ctx.hasUI) return;
+      const lifecycle = options.captureLifecycle();
+      const isCurrent = () => lifecycle.isCurrent() && readyIsCurrent();
+      if (!isCurrent() || lifecycle.signal.aborted) return;
+      const ui = await options.loadInteractiveUi();
+      if (!isCurrent() || lifecycle.signal.aborted) return;
+      await ui.showReadyPlanMenu(ctx, {
+        planThinkingLevel: options.getThinkingLevel(),
+        implementationDefaults: configuredDefaults(),
+        implementationOutcome: options.implementationOutcome,
+        getExportDestination: () => options.getExportDestination(ctx),
+        signal: lifecycle.signal,
+        isCurrent,
+        show: () => options.show(ctx),
+        implementHere: () => options.implementHere(ctx),
+        implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
+        exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, isCurrent),
+        save: () => options.save(ctx),
+        stay: () => options.stay(ctx),
+        exit: () => options.exitReady(ctx)
+      });
+    },
     async showCurrent(ctx) {
       if (!ctx.hasUI) {
         ctx.ui.notify(options.statusText(), "info");
@@ -969,7 +992,6 @@ var WorkflowMutex = class {
 
 // src/plan-mode.ts
 var STATE_ENTRY_TYPE = "plan-mode-state";
-var PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
 var RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE = "plan-mode-recovered-input";
 var BLOCKED_MUTATING_TOOLS = /* @__PURE__ */ new Set(["edit", "write", "update_plan"]);
 var DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
@@ -982,7 +1004,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-FOD24O2Y.js").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-QBYBTUTT.js").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1000,6 +1022,7 @@ function planMode(pi, dependencies = {}) {
   let publishedContractMode;
   let modeContractsRelevant = false;
   let readyPresentationIntent;
+  let readyPresentationInFlightNonce;
   let nextReadyPresentationNonce = 0;
   let menuGeneration = 0;
   let workflowGeneration = 0;
@@ -1530,6 +1553,10 @@ Blocked command: ${blocked}`
   pi.on("agent_end", async (event, ctx) => {
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
     const text = latestAssistantText(event.messages);
+    if (finalizationRunOutcome(event.messages) === "cancelled") {
+      finalizationRequest.observeRunEnd(workflowGeneration, "cancelled");
+      return;
+    }
     const parsedPlan = parseProposedPlan(text);
     if (parsedPlan.kind !== "valid") {
       finalizationRequest.observeRunEnd(workflowGeneration, finalizationRunOutcome(event.messages));
@@ -1562,21 +1589,15 @@ Blocked command: ${blocked}`
     const intent = readyPresentationIntent;
     if (!intent || !readyPresentationIsCurrent(intent)) return;
     if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
-    readyPresentationIntent = void 0;
-    if (intent.source !== "legacy_proposed_plan") return;
+    if (readyPresentationInFlightNonce === intent.nonce) return;
+    readyPresentationInFlightNonce = intent.nonce;
     try {
-      pi.sendMessage(
-        {
-          customType: PROPOSED_PLAN_MESSAGE_TYPE,
-          content: `**Proposed Plan**
-
-${intent.plan}`,
-          display: true
-        },
-        { triggerTurn: false }
-      );
+      await planActions.showReady(ctx, () => readyPresentationIsCurrent(intent));
     } catch (error) {
       if (!isStaleExtensionContextError(error)) throw error;
+    } finally {
+      if (readyPresentationIntent?.nonce === intent.nonce) readyPresentationIntent = void 0;
+      if (readyPresentationInFlightNonce === intent.nonce) readyPresentationInFlightNonce = void 0;
     }
   });
   function enterPlanMode(ctx, candidate = state) {

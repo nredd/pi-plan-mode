@@ -94,10 +94,110 @@ async function showActiveImplementationMenu(ctx, options) {
 
 // src/plan-action-menus.ts
 import { defineMenu as defineMenu2, runMenu as runMenu2, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
-var IMPLEMENTATION_CONTEXT_LINES = [
-  "Implement here keeps this planning conversation.",
-  "Start fresh transfers only the approved plan to a new session."
+
+// src/ready-plan-chooser.ts
+import { Key, matchesKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+var READY_PLAN_ACTIONS = [
+  "show",
+  "implement-here",
+  "implement-fresh",
+  "export",
+  "save",
+  "stay",
+  "exit"
 ];
+var READY_PLAN_LABELS = {
+  show: "Show latest proposed plan",
+  "implement-here": "Implement here",
+  "implement-fresh": "Start fresh and implement",
+  export: "Export plan\u2026",
+  save: "Save for later",
+  stay: "Stay in Plan mode",
+  exit: "Discard plan and exit"
+};
+async function chooseReadyPlanAction(ctx) {
+  if (ctx.mode !== "tui" || !ctx.hasUI) return void 0;
+  return ctx.ui.custom((tui, _theme, keybindings, done) => {
+    let selected = 0;
+    let closed = false;
+    let cells = [];
+    const finish = (action) => {
+      if (closed) return;
+      closed = true;
+      done(action);
+    };
+    const select = (index) => {
+      selected = (index + READY_PLAN_ACTIONS.length) % READY_PLAN_ACTIONS.length;
+      tui.requestRender();
+    };
+    const activate = () => finish(READY_PLAN_ACTIONS[selected]);
+    return {
+      render(width) {
+        const lines = ["Proposed plan ready"];
+        cells = [];
+        let row = "";
+        let rowCells = [];
+        const flush = () => {
+          if (!row) return;
+          const y = lines.length;
+          lines.push(row);
+          cells.push(...rowCells.map((cell) => ({ ...cell, y })));
+          row = "";
+          rowCells = [];
+        };
+        for (const [index, action] of READY_PLAN_ACTIONS.entries()) {
+          const marker = index === selected ? "\u203A" : " ";
+          const cell = `${marker}[ ${READY_PLAN_LABELS[action]} ]`;
+          const cellWidth = visibleWidth(cell);
+          const separator = row ? "  " : "";
+          if (row && visibleWidth(row) + visibleWidth(separator) + cellWidth > width) flush();
+          if (cellWidth > width) {
+            flush();
+            const y = lines.length;
+            const wrapped = wrapTextWithAnsi(cell, Math.max(1, width));
+            lines.push(...wrapped);
+            cells.push(...wrapped.map((_line, offset) => ({ action, x: 0, y: y + offset, width: Math.max(1, width) })));
+            continue;
+          }
+          const x = visibleWidth(row) + visibleWidth(separator);
+          row += separator + cell;
+          rowCells.push({ action, x, width: cellWidth });
+        }
+        flush();
+        return lines;
+      },
+      invalidate() {
+      },
+      handleInput(data) {
+        if (matchesKey(data, Key.ctrl("c")) || keybindings.matches(data, "tui.select.cancel")) {
+          finish(void 0);
+          return;
+        }
+        if (keybindings.matches(data, "tui.select.down") || matchesKey(data, Key.right) || data === "	") {
+          select(selected + 1);
+          return;
+        }
+        if (keybindings.matches(data, "tui.select.up") || matchesKey(data, Key.left)) {
+          select(selected - 1);
+          return;
+        }
+        if (keybindings.matches(data, "tui.select.confirm") || data === " ") activate();
+      },
+      handleMouse(event) {
+        const cell = cells.find(
+          (candidate) => candidate.y === event.y && event.x >= candidate.x && event.x < candidate.x + candidate.width
+        );
+        if (!cell) return void 0;
+        const index = READY_PLAN_ACTIONS.indexOf(cell.action);
+        if (index >= 0 && index !== selected) select(index);
+        if (event.type === "click" && event.button === "left") finish(cell.action);
+        return { handled: true, capture: event.type === "press" };
+      }
+    };
+  });
+}
+
+// src/plan-action-menus.ts
 var THINKING_LEVEL_DESCRIPTIONS = {
   off: "No reasoning",
   minimal: "Very brief reasoning (~1k tokens)",
@@ -120,24 +220,11 @@ async function showPlanModeMenu(ctx, options) {
       main: () => ({
         kind: "actions",
         title: "Plan mode",
-        lines: [
-          options.statusText,
-          ...options.hasReadyPlan ? [...IMPLEMENTATION_CONTEXT_LINES, options.implementationOutcome()] : []
-        ],
+        lines: [options.statusText],
         items: options.hasReadyPlan ? [
           { id: "show", label: "Show latest proposed plan", action: "show" },
-          {
-            id: "implement-here",
-            label: "Implement here",
-            description: "Continue in this session with the planning conversation.",
-            action: "implement-here"
-          },
-          {
-            id: "implement-fresh",
-            label: "Start fresh and implement",
-            description: "Configure one-shot model and thinking choices first.",
-            to: "fresh"
-          },
+          { id: "implement-here", label: "Implement here", action: "implement-here" },
+          { id: "implement-fresh", label: "Start fresh and implement", to: "fresh" },
           { id: "export", label: "Export plan\u2026", to: "export" },
           { id: "save", label: "Save for later", action: "save" },
           { id: "stay", label: "Stay in Plan mode", action: "stay" },
@@ -201,6 +288,35 @@ async function showPlanModeMenu(ctx, options) {
   });
 }
 async function showReadyPlanMenu(ctx, options) {
+  if (ctx.mode === "tui" && ctx.hasUI) {
+    const action = await chooseReadyPlanAction(ctx);
+    if (!action || options.signal.aborted || !options.isCurrent()) return;
+    if (action === "show") {
+      options.show();
+      return;
+    }
+    if (action === "implement-here") {
+      await options.implementHere();
+      return;
+    }
+    if (action === "save") {
+      options.save();
+      return;
+    }
+    if (action === "stay") {
+      options.stay();
+      return;
+    }
+    if (action === "exit") {
+      options.exit();
+      return;
+    }
+    await runReadyPlanMenu(ctx, options, action === "implement-fresh" ? "fresh" : "export");
+    return;
+  }
+  await runReadyPlanMenu(ctx, options, "ready");
+}
+async function runReadyPlanMenu(ctx, options, start) {
   const freshFlow = createFreshImplementationFlow(
     ctx,
     options.planThinkingLevel,
@@ -208,25 +324,15 @@ async function showReadyPlanMenu(ctx, options) {
     options.implementFresh
   );
   const menu = defineMenu2({
-    start: "ready",
+    start,
     screens: {
       ready: () => ({
         kind: "actions",
-        title: "Proposed plan ready. What next?",
-        lines: [...IMPLEMENTATION_CONTEXT_LINES, options.implementationOutcome()],
+        title: "Proposed plan ready",
         items: [
-          {
-            id: "implement-here",
-            label: "Implement here",
-            description: "Continue in this session with the planning conversation.",
-            action: "implement-here"
-          },
-          {
-            id: "implement-fresh",
-            label: "Start fresh and implement",
-            description: "Configure one-shot model and thinking choices first.",
-            to: "fresh"
-          },
+          { id: "show", label: "Show latest proposed plan", action: "show" },
+          { id: "implement-here", label: "Implement here", action: "implement-here" },
+          { id: "implement-fresh", label: "Start fresh and implement", to: "fresh" },
           { id: "export", label: "Export plan\u2026", to: "export" },
           { id: "save", label: "Save for later", action: "save" },
           { id: "stay", label: "Stay in Plan mode", action: "stay" },
@@ -240,6 +346,10 @@ async function showReadyPlanMenu(ctx, options) {
       export: () => planExportInputScreen(options.getExportDestination)
     },
     actions: {
+      show: async () => {
+        options.show();
+        return { kind: "close" };
+      },
       "implement-here": async () => {
         await options.implementHere();
         return { kind: "close" };
@@ -1020,4 +1130,4 @@ export {
   showReadyPlanMenu,
   showSavedPlanMenu
 };
-//# sourceMappingURL=interactive-ui-FOD24O2Y.js.map
+//# sourceMappingURL=interactive-ui-QBYBTUTT.js.map
