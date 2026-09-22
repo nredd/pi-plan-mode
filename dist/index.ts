@@ -1004,7 +1004,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-QBYBTUTT.js").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-LBY2FPN5.js").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });

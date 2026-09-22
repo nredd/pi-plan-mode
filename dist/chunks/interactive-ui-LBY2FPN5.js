@@ -169,8 +169,12 @@ async function chooseReadyPlanAction(ctx) {
       invalidate() {
       },
       handleInput(data) {
-        if (matchesKey(data, Key.ctrl("c")) || keybindings.matches(data, "tui.select.cancel")) {
+        if (matchesKey(data, Key.ctrl("c"))) {
           finish(void 0);
+          return;
+        }
+        if (keybindings.matches(data, "tui.select.cancel")) {
+          finish("exit");
           return;
         }
         if (keybindings.matches(data, "tui.select.down") || matchesKey(data, Key.right) || data === "	") {
@@ -1130,4 +1134,4 @@ export {
   showReadyPlanMenu,
   showSavedPlanMenu
 };
-//# sourceMappingURL=interactive-ui-QBYBTUTT.js.map
+//# sourceMappingURL=interactive-ui-LBY2FPN5.js.map
