@@ -71,11 +71,17 @@ test("watched retired visibility is ignored while remaining settings still reloa
     const context = createMockContext();
     try {
       await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
-      await writeFile(
-        settingsPath,
-        '{"toolVisibility":"after-first-plan","toggleShortcut":"ctrl+shift+p","thinkingLevel":"high"}\n',
+      // macOS FSEvents can drop a write that lands while the watch stream is still starting, so
+      // save again until the reload is observed, as a user would. This tests reload semantics,
+      // not watcher startup latency.
+      await waitForCondition(
+        () => reloaded,
+        () =>
+          writeFile(
+            settingsPath,
+            '{"toolVisibility":"after-first-plan","toggleShortcut":"ctrl+shift+p","thinkingLevel":"high"}\n',
+          ),
       );
-      await waitForCondition(() => reloaded);
       await mock.commands.get("plan")?.handler("start", context.ctx);
 
       assert.equal(mock.thinkingLevel, "high");
@@ -234,10 +240,16 @@ test("branch-restored selections constrain policy while helpers remain model-vis
   assert.equal(((await callTool(mock, context, "bash", { command: "pwd" })) as { block?: boolean }).block, true);
 });
 
-async function waitForCondition(condition: () => boolean) {
+/** Poll `condition`, running `act` first and then every 250ms until it holds or 2s pass. */
+async function waitForCondition(condition: () => boolean, act?: () => Promise<void>) {
   const deadline = Date.now() + 2_000;
+  let nextAct = 0;
   while (Date.now() < deadline) {
     if (condition()) return;
+    if (act && Date.now() >= nextAct) {
+      nextAct = Date.now() + 250;
+      await act();
+    }
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
   }
   assert.equal(condition(), true);
