@@ -169,12 +169,13 @@ export default function laterExtension(pi) {
     await command.handler("start", runner.createCommandContext());
     const complete = runner.getToolDefinition("plan_mode_complete");
     assert.ok(complete);
+    const signal = new AbortController().signal;
     await complete.execute(
       "complete",
       { plan: "# Plan\n\nImplement it." },
-      new AbortController().signal,
+      signal,
       undefined,
-      runner.createContext(),
+      runner.createToolContext("complete", signal),
     );
     await runner.emit({ type: "agent_settled" });
     await handoffFinished.promise;
