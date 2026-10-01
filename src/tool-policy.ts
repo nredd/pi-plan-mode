@@ -414,9 +414,13 @@ function shellWords(segment: string): string[] | undefined {
   return words;
 }
 
+const IGNORE_CASE_COMMANDS = new Set(["rg", "grep", "egrep", "fgrep", "git"]);
+
 function hasSafeArguments(command: string, args: string[]) {
-  const forbidden = new Set(["-i", "--in-place", "--fix", "--write", "-delete", "--delete"]);
+  const forbidden = new Set(["--in-place", "--fix", "--write", "-delete", "--delete"]);
   if (args.some((argument) => forbidden.has(argument))) return false;
+  // `-i` means ignore-case for search tools but in-place edit for sed/perl/etc.
+  if (!IGNORE_CASE_COMMANDS.has(command) && args.includes("-i")) return false;
   if (
     command === "sed" &&
     args.some(

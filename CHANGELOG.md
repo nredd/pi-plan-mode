@@ -1,5 +1,13 @@
 # @nredd/pi-plan-mode
 
+## 0.58.3-nredd.3
+
+### Fixed
+
+- Allow `-i` (ignore case) for `rg`, `grep`, `egrep`, `fgrep` and `git` in the
+  reviewed shell policy. It was rejected for every command because `sed -i`
+  edits in place, which is still blocked.
+
 ## 0.58.3-nredd.2
 
 ### Fixed

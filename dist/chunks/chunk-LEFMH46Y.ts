@@ -1489,9 +1489,11 @@ function shellWords(segment) {
   if (word) words.push(word);
   return words;
 }
+var IGNORE_CASE_COMMANDS = /* @__PURE__ */ new Set(["rg", "grep", "egrep", "fgrep", "git"]);
 function hasSafeArguments(command, args) {
-  const forbidden = /* @__PURE__ */ new Set(["-i", "--in-place", "--fix", "--write", "-delete", "--delete"]);
+  const forbidden = /* @__PURE__ */ new Set(["--in-place", "--fix", "--write", "-delete", "--delete"]);
   if (args.some((argument) => forbidden.has(argument))) return false;
+  if (!IGNORE_CASE_COMMANDS.has(command) && args.includes("-i")) return false;
   if (command === "sed" && args.some(
     (argument) => argument.startsWith("--in-place=") || /^-[^-]+/.test(argument) && argument.slice(1).includes("i")
   )) {
@@ -1836,4 +1838,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-CWK55NQU.ts.map
+//# sourceMappingURL=chunk-LEFMH46Y.ts.map
