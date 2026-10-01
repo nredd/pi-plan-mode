@@ -3,6 +3,7 @@
 [Back to README](../README.md)
 
 - [Default Plan policy tools](#default-plan-policy-tools)
+- [Enable inactive built-in search tools in Pi](#enable-inactive-built-in-search-tools-in-pi)
 - [Plan reinjection](#plan-reinjection)
 - [Fresh implementation runtime](#fresh-implementation-runtime)
 - [Export destination](#export-destination)
@@ -78,6 +79,30 @@ Names `edit`, `write`, and `update_plan` stay blocked, and `bash` or `powershell
 A selection accepted through **Choose tools, then start…** or `/plan tools` is stored in that Pi session and takes precedence over `defaultPlanTools` when the session resumes.
 The global setting remains the policy baseline for fresh sessions and sessions without an explicit selection.
 Settings saves immediately, but saved policy names and thinking apply only when a later Plan workflow starts; they never mutate active schemas or a workflow already in progress.
+
+### Enable inactive built-in search tools in Pi
+
+Pi's default selection leaves the registered built-ins `grep`, `find`, and `ls` inactive.
+Settings and `/plan tools` label these rows **inactive in Pi**, not **blocked by Plan policy**.
+Pi controls tool activation; `defaultPlanTools` only grants Plan-mode execution permission and never activates tools.
+Built-in `edit` and `write` remain policy-blocked even when active in Pi.
+
+To enable the search tools, edit Pi's user settings at `<getAgentDir()>/settings.json` (normally `~/.pi/agent/settings.json`, or `$PI_CODING_AGENT_DIR/settings.json` when configured), **not** `pi-plan-mode.json`:
+
+```json
+{
+  "defaultTools": ["+grep", "+find", "+ls"]
+}
+```
+
+This setup requires Pi's `defaultTools` support; older releases without it need an upgrade before the setting takes effect.
+The extension remains usable on its supported older Pi releases without this setting.
+The `+` entries add to Pi's inherited default selection.
+If `defaultTools` already exists, append these entries to that array rather than replacing your custom selection; preserve all unrelated settings.
+Restart Pi, then reopen `/plan settings` → **Plan policy tools** or `/plan tools` and select the tools if your Plan policy does not already allow them.
+CLI tool allowlists/exclusions can override this setting, and trusted project settings can affect the effective selection.
+If the rows remain inactive, check those overrides before changing Plan policy.
+Custom tools and overrides of built-in names still require explicit Plan-policy opt-in; this setup does not bypass blocked policy, hidden exposure, or missing registration.
 
 ### Plan reinjection
 

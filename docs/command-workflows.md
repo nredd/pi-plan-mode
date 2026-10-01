@@ -16,6 +16,8 @@ Persistent defaults belong in [Settings](./settings.md).
 
 The TUI selector supports fuzzy search and paging; RPC shows the unfiltered list.
 The selector distinguishes callable tools, inactive direct tools, hidden tools, blocked policies, and pending registration.
+**Inactive in Pi** means Pi must enable the tool separately; **blocked by Plan policy** cannot be enabled by selecting the row.
+For inactive built-in `grep`, `find`, and `ls`, follow the [Pi settings setup](./settings.md#enable-inactive-built-in-search-tools-in-pi) before reopening the selector.
 Native MCP tools are explicit opt-ins; registered `codemode` and `deferred` exposure is selectable without direct activation.
 Select the needed orchestrator separately, and select every nested callee; neither choice grants the other permission.
 Selected names awaiting metadata stay selected for first-request resolution.
