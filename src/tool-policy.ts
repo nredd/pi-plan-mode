@@ -113,6 +113,10 @@ const READ_ONLY_COMMANDS = new Set([
   "eza",
 ]);
 
+// `-i` edits in place for sed. For these inspection commands it is case-insensitive
+// search or inode output, which is how plan mode reads markdown and other text.
+const INSPECTION_CASE_FLAG_COMMANDS = new Set(["rg", "grep", "git", "diff", "fd", "ls", "sort", "find", "bat", "eza"]);
+
 export function isBuiltinTool(tool: ToolInfo) {
   const source = tool.sourceInfo;
   if (source?.source !== "builtin") return false;
@@ -420,7 +424,8 @@ function shellWords(segment: string): string[] | undefined {
 }
 
 function hasSafeArguments(command: string, args: string[]) {
-  const forbidden = new Set(["-i", "--in-place", "--fix", "--write", "-delete", "--delete"]);
+  const forbidden = new Set(["--in-place", "--fix", "--write", "-delete", "--delete"]);
+  if (!INSPECTION_CASE_FLAG_COMMANDS.has(command)) forbidden.add("-i");
   if (args.some((argument) => forbidden.has(argument))) return false;
   if (
     command === "sed" &&

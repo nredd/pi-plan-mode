@@ -139,6 +139,7 @@ After they become visible, the Plan-only helpers remain visible in Normal mode, 
 
 Limited `bash` uses a fail-closed Bash policy, including when an extension overrides the canonical `bash` tool name.
 It accepts common inspection commands, read-only Git and npm queries, pipelines and command lists composed entirely of accepted commands, plus selected checks such as `npm test`, `npm run typecheck`, and `cargo test`.
+Case-insensitive `-i` is allowed for inspection commands such as `rg`, `grep`, and `git grep`. Commands where `-i` edits in place, including `sed`, stay blocked.
 It also accepts `hostname` without arguments and local Windows `tasklist` queries using reviewed display, filter, module, and service flags.
 Reviewed Git inspections may place `--no-pager` before the accepted subcommand.
 They may also place one or more complete `-C <path>` pairs before the accepted subcommand only when every path is `.` or the exact current Pi working directory.
