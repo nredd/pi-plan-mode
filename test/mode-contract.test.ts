@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "vitest";
 import {
   createModeContractMessage,
   latestModeContract,
   MODE_CONTRACT_MESSAGE_TYPE,
   modeContractContent,
+  modeContractFromMessage,
   reconcileModeContract,
 } from "../src/mode-contract.js";
 
@@ -28,6 +30,21 @@ test("reconciliation leaves an effective retained contract byte-for-byte unchang
   const messages = [user("A"), createModeContractMessage("plan", 10), user("B")];
   assert.equal(reconcileModeContract(messages, "plan"), messages);
   assert.deepEqual(latestModeContract(messages), { index: 1, mode: "plan" });
+});
+
+test("the exact pre-native-MCP v1 contract preserves the retained request prefix", () => {
+  const legacy = {
+    ...createModeContractMessage("plan", 10),
+    content: readFileSync(new URL("./fixtures/legacy-plan-contract.txt", import.meta.url), "utf8"),
+  };
+  const messages = [createModeContractMessage("normal", 1), user("Earlier context"), legacy, user("Continue planning")];
+  assert.deepEqual(latestModeContract(messages), { index: 2, mode: "plan" });
+  assert.equal(reconcileModeContract(messages, "plan"), messages);
+  const next = [...messages, user("Another turn")];
+  assert.equal(reconcileModeContract(next, "plan"), next);
+  assert.deepEqual(next.slice(0, messages.length), messages);
+  assert.notEqual(legacy.content, modeContractContent("plan"));
+  assert.equal(modeContractFromMessage({ ...legacy, content: `${legacy.content}\nChanged instructions` }), undefined);
 });
 
 test("reconciliation inserts one deterministic fallback after a leading system and summaries", () => {

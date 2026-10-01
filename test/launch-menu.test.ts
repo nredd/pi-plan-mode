@@ -8,6 +8,7 @@ import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
 import { readPlanModeSettings } from "../src/settings.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
+import { nativeTool } from "./tool-exposure-support.js";
 
 const REQUIRED_PLAN_TOOLS = ["plan_mode_question", "plan_mode_complete"];
 const STARTUP_TOOLS = ["read", "write", "custom", ...REQUIRED_PLAN_TOOLS];
@@ -523,6 +524,46 @@ test("/plan tools reuses the pre-start draft and cancellation has no side effect
     assert.deepEqual(mock.rawPi.getActiveTools(), STABLE_TOOLS);
     assert.equal(context.statuses.get("plan-mode"), ending === "done" ? "plan active" : undefined);
     assert.equal(mock.entries.length > 0, ending === "done");
+  }
+});
+
+test("RPC launch admits selected native direct and callable tools without activating them", async () => {
+  const tools = [
+    nativeTool("codemode", "model-only", "codemode"),
+    nativeTool("mcp__docs__direct", "direct"),
+    nativeTool("mcp__docs__read", "deferred"),
+    nativeTool("secret", "hidden"),
+  ];
+  const mock = createMockPi({ allTools: tools, activeTools: ["codemode", "mcp__docs__direct", "secret"] });
+  planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+  const rpc = createRpcHarness([
+    { kind: "select", response: "[ ] codemode" },
+    { kind: "select", response: "[ ] mcp__docs__direct" },
+    { kind: "select", response: "[ ] mcp__docs__read" },
+    { kind: "select", response: "Done — start with this policy" },
+  ]);
+  const context = createMockContext({ mode: "rpc", hasUI: true, ...rpc.ui });
+  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const active = mock.rawPi.getActiveTools();
+  try {
+    await mock.commands.get("plan")?.handler("tools", context.ctx);
+    rpc.assertConsumed();
+    assert.ok(rpc.dialogs[0]?.options?.some((option) => /^\[-\] secret \(unavailable: Hidden in Pi/.test(option)));
+    assert.match(
+      rpc.dialogs.at(-1)?.title ?? "",
+      /Plan policy will allow: codemode, mcp__docs__direct, mcp__docs__read/,
+    );
+    await mock.events.get("context")?.[0]?.({ messages: [] }, context.ctx);
+    assert.equal(
+      await mock.events.get("tool_call")?.[0]?.(
+        { toolName: "mcp__docs__read", parentToolCallId: "outer", input: {} },
+        context.ctx,
+      ),
+      undefined,
+    );
+    assert.deepEqual(mock.rawPi.getActiveTools(), active);
+  } finally {
+    await mock.events.get("session_shutdown")?.[0]?.({ reason: "exit" }, context.ctx);
   }
 });
 

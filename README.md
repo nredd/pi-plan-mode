@@ -121,11 +121,19 @@ Plan mode registers `plan_mode_question` and `plan_mode_complete` during extensi
 Another active-tool policy may hide them, in which case Plan start or restore fails without widening that policy.
 By default, the Plan policy allows active safe built-ins such as `read`, limited `bash`, limited `powershell`, `grep`, `find`, and `ls`.
 The optional native `powershell` tool must be active when an automatic Plan policy starts, for example through Pi's Windows `defaultTools` setting, unless its name was explicitly retained for first-request resolution.
-Built-in `edit` and `write`, `update_plan`, tools still inactive at the first request, and deselected tools are blocked at execution time even though active schemas remain visible.
-Extension and custom tools are denied by default because Pi tools do not expose standardized mutability metadata; explicitly allow a custom-tool name before starting only when you accept the risk.
-For example, you can opt into `firecrawl_scrape`, `firecrawl_search`, or `lsp_diagnostics` when you want to use the effective active tool during planning.
-An active selectable tool omitted from the Plan policy reports that it needs explicit selection through `/plan tools` or `defaultPlanTools` before the next workflow.
-Registered but inactive, unregistered, metadata-free, and built-in blocked tools report their distinct fail-closed reasons instead of suggesting that every denial is a missing selection.
+Tools named `edit`, `write`, or `update_plan` and deselected tools are blocked at execution time even though active schemas remain visible.
+Tools outside the reviewed core policy—including native MCP tools, native orchestration, extensions, and custom tools—are denied by default; explicitly allow their names before starting only when you accept the risk.
+Server annotations such as `readOnlyHint` are unverified hints, not permission or a safety guarantee.
+For example, opt into `mcp__docs__read`, `firecrawl_scrape`, or `lsp_diagnostics` through `/plan tools` or `defaultPlanTools` before the next workflow.
+
+Direct and `model-only` tools must be active in Pi; `model-only` tools cannot be called by another tool.
+Registered `codemode` and `deferred` tools are selectable without direct activation and can run through Pi's nested tool pipeline.
+MCP `codemode-deferred` follows its public `deferred` exposure.
+Select an orchestrator such as `codemode` or `tool_search` separately when needed: allowing it does not authorize its callees, and selecting an MCP tool does not enable its orchestrator.
+Pi's `tool_search` may declare tools independently, but declaration does not admit unselected names to the frozen Plan policy.
+Every nested call remains individually gated, including editing and limited-shell restrictions.
+Hidden tools remain unavailable even when selected or listed as active; unsupported exposure and unavailable policy metadata fail closed.
+Registered but inactive direct tools, unregistered tools, blocked core tools, and unselected tools report distinct denial guidance.
 A tool admitted before later deactivation can be reactivated and reused in the current workflow without restarting.
 After they become visible, the Plan-only helpers remain visible in Normal mode, but their handlers and the `tool_call` policy reject calls unless Plan mode owns the active workflow.
 
@@ -166,9 +174,10 @@ RPC keeps the existing sequential `select` and `editor` dialogs because Pi RPC c
 If you cancel or no interactive UI is available, the agent should ask a concise plain-text question or proceed only with a clearly stated low-risk assumption instead of prematurely producing a final plan.
 
 Pi identifies tools by tool name.
-The pre-start selector stores accepted session policy names and shows each effective tool's source from Pi metadata, such as `built-in`, a user extension path, or a project extension path.
-A selected name can run in Plan mode only when Pi has registered and activated the effective selectable tool by that workflow's first provider-bound context.
-The allowlist freezes at that boundary, so a tool registered or activated later waits for the next Plan workflow.
+The pre-start selector stores accepted session policy names and shows each effective tool's source and availability from Pi metadata, including native built-in extension registrations.
+A selected name can run in Plan mode only when the effective tool is registered, available through its exposure, and permitted by policy at the workflow's first provider-bound context.
+The allowlist freezes at that boundary and restores without admitting new names after reload, resume, or tree navigation.
+A tool registered or first made available later waits for the next Plan workflow; an admitted callable tool later declared to the model keeps its existing admission.
 If an extension overrides a built-in tool with the same name, Pi exposes the effective tool for that name and the selector shows that source.
 
 A complete Plan mode answer should appear only after the agent has resolved discoverable facts and high-impact user decisions.
@@ -285,6 +294,7 @@ During a guaranteed-plan implementation, it removes both the original implementa
 Plan and Normal requests share one append-only conversation.
 The extension appends one hidden, model-visible, versioned Plan contract before the first Plan prompt and one Normal contract before the first post-Plan Normal or implementation prompt.
 Ordinary linear turns do not rewrite or duplicate these contracts.
+The Plan contract explains native-tool opt-in and per-call nested enforcement; this wording changes future Plan transitions without rewriting existing transition messages.
 **Implement here** retains the Plan dialogue, structured questions, tool calls, completion evidence, and `Implement the plan.` kickoff in order.
 **Start fresh and implement** is the isolation path and transfers only the approved plan plus the Normal contract to a linked session.
 

@@ -55,15 +55,25 @@ Neither setting changes model-visible tool schemas.
 Tool names must be non-empty strings; duplicates are removed in first-seen order.
 Explicit configured or session-selected names remain policy intent when their tool is unknown or inactive, but Plan mode never registers or activates them.
 The inactive menu takes a fresh registered and active tool snapshot each time it opens, while an already open picker does not update in place.
-At the workflow's first provider-bound context, after every `before_agent_start` handler has settled, Plan mode resolves retained names against Pi's live registered and active tools and freezes the executable allowlist.
+At the workflow's first provider-bound context, after every `before_agent_start` handler has settled, Plan mode resolves retained names against Pi's live registry, exposure, and active declarations and freezes the executable allowlist.
 Automatic defaults recheck the effective source metadata at that boundary, so a custom override of a safe built-in name still requires explicit opt-in.
 The resolved allowlist persists with the active workflow and restores without reopening the resolution boundary after reload, resume, or tree navigation.
-Unknown, inactive, and Plan-mode-blocked names remain unavailable after that resolution, and a later registration or activation waits for the next Plan workflow rather than a new session.
+Names unavailable at resolution wait for the next Plan workflow rather than a new session.
+An admitted tool may be reactivated or declared later without widening that frozen policy, but current hidden exposure still blocks it.
 Settings shows unresolved names as pending registration; resetting to automatic removes the entire override.
-Non-built-in names in this global setting are an explicit user-risk opt-in, just like selecting them in the pre-start workflow selector.
-Plan mode does not interpret a selected custom tool's arguments or actions: allowing one trusts the whole effective tool.
+
+Direct and `model-only` tools must be active; registered `codemode` or `deferred` tools can be selected without direct activation.
+MCP `codemode-deferred` is represented as public exposure `deferred`.
+`model-only` tools cannot run as nested calls; hidden and unsupported exposure remain unavailable regardless of active declarations or saved names.
+Missing exposure on older Pi versions retains the direct-tool behavior.
+Native MCP tools and orchestration tools require explicit opt-in just like other tools outside the reviewed core policy; server annotations never grant permission.
+For example, `"defaultPlanTools": ["read", "codemode", "mcp__docs__read"]` permits that MCP tool through an already-active `codemode` orchestrator.
+Selecting either tool does not enable the other, and every nested call needs its own Plan-policy admission.
+Pi's `tool_search` can declare a tool without restarting an admitted workflow, but cannot add an unselected name to its frozen Plan policy.
+
+Allowing a custom tool trusts its effective implementation; Plan mode does not infer its side effects from arguments or annotations.
 Pi resolves tools by name, so if an extension overrides a built-in name, the effective extension tool is selected instead.
-An effective active tool named `bash` or `powershell` remains subject to its limited-shell policy regardless of its source metadata.
+Names `edit`, `write`, and `update_plan` stay blocked, and `bash` or `powershell` stays subject to its limited-shell policy, including nested calls and regardless of source metadata.
 
 A selection accepted through **Choose tools, then start…** or `/plan tools` is stored in that Pi session and takes precedence over `defaultPlanTools` when the session resumes.
 The global setting remains the policy baseline for fresh sessions and sessions without an explicit selection.

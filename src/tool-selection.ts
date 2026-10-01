@@ -1,4 +1,5 @@
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
+import { planModeToolAvailability } from "./tool-availability.js";
 import {
   canSelectToolInPlanMode,
   classifyPlanModeTool,
@@ -24,8 +25,41 @@ export function toolPolicyLabel(tool: ToolInfo) {
   const policy = classifyPlanModeTool(tool);
   if (policy === "read-only") return "built-in read-only";
   if (policy === "limited") return "built-in limited";
-  if (policy === "blocked") return "built-in blocked";
+  if (policy === "blocked") return tool.sourceInfo?.source ? "built-in blocked" : "policy metadata unavailable";
   return `user opt-in: ${toolSourceLabel(tool)}`;
+}
+
+export function planModeToolSelection(tool: ToolInfo, activeNames: ReadonlySet<string>, retained: boolean) {
+  const availability = planModeToolAvailability(tool, activeNames);
+  let unavailable: string | undefined;
+  switch (availability) {
+    case "inactive":
+      unavailable = retained
+        ? "Not active yet; retained and resolved before the first request"
+        : "Not active in Pi; Plan mode will not activate it";
+      break;
+    case "hidden":
+      unavailable = "Hidden in Pi; retained selection cannot enable it";
+      break;
+    case "unsupported":
+      unavailable = "Unsupported tool exposure; Plan mode cannot enable it";
+      break;
+  }
+  const policy =
+    unavailable ??
+    [
+      toolPolicyLabel(tool),
+      ...(tool.exposure === "codemode" || tool.exposure === "deferred" ? ["callable via other tools"] : []),
+      ...(tool.exposure === "model-only" ? ["model calls only"] : []),
+    ].join(" · ");
+  const description = tool.description ?? "No description available";
+  const disabledReason = unavailable ?? (canSelectToolInPlanMode(tool) ? undefined : "Blocked by Plan-mode policy");
+  return {
+    description: `${policy} · ${description}`,
+    searchText: `${policy} ${description}`,
+    disabled: disabledReason !== undefined,
+    disabledReason,
+  };
 }
 
 function toolSourceLabel(tool: ToolInfo) {
@@ -38,8 +72,16 @@ export function unique(values: string[]) {
   return Array.from(new Set(values));
 }
 
-export function filterAvailableSelectedToolNames(names: string[], tools: ToolInfo[]) {
-  const availableNames = new Set(tools.filter(canSelectToolInPlanMode).map((tool) => tool.name));
+export function filterAvailableSelectedToolNames(
+  names: string[],
+  tools: ToolInfo[],
+  activeNames: ReadonlySet<string> = new Set(tools.map((tool) => tool.name)),
+) {
+  const availableNames = new Set(
+    tools
+      .filter((tool) => canSelectToolInPlanMode(tool) && planModeToolAvailability(tool, activeNames) === "available")
+      .map((tool) => tool.name),
+  );
   return unique(names.filter((name) => availableNames.has(name)));
 }
 

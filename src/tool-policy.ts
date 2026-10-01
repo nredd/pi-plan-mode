@@ -114,10 +114,15 @@ const READ_ONLY_COMMANDS = new Set([
 ]);
 
 export function isBuiltinTool(tool: ToolInfo) {
-  return tool.sourceInfo.source === "builtin";
+  const source = tool.sourceInfo;
+  if (source?.source !== "builtin") return false;
+  // Core tools own builtin:<name>; built-in extensions may own many tools or
+  // expose model-only orchestration. Missing paths preserve legacy core policy.
+  return !source.path || (source.path === `builtin:${tool.name}` && tool.exposure !== "model-only");
 }
 
 export function classifyPlanModeTool(tool: ToolInfo): PlanModeToolPolicy {
+  if (!tool.sourceInfo?.source) return "blocked";
   if (!isBuiltinTool(tool)) return "user-opt-in";
   if (BLOCKED_BUILTIN_TOOLS.has(tool.name)) return "blocked";
   if (tool.name === "bash" || tool.name === "powershell") return "limited";

@@ -54,8 +54,8 @@ export async function showPlanLaunchMenu(ctx: ExtensionContext, options: PlanLau
         lines: [
           "Policy changes apply only when you start Plan mode; first use may also reveal Plan helpers.",
           options.toolSummary(selectedNames),
-          "Active tools can be chosen now; retained names resolve before the first request.",
-          "Plan mode never activates tools, and non-built-ins run at user risk.",
+          "Available tools can be chosen now; retained names resolve before the first request.",
+          "Plan mode never activates tools; tools outside its reviewed core policy run at user risk.",
         ],
         enableSearch: true,
         viewportSize: 10,

@@ -28,8 +28,9 @@ import {
   type UpdatePlanModeSettingsOptions,
   updatePlanModeSettings,
 } from "./settings.js";
+import { planModeToolAvailability } from "./tool-availability.js";
 import { canSelectToolInPlanMode } from "./tool-policy.js";
-import { defaultPlanModeToolNames, toolPolicyLabel } from "./tool-selection.js";
+import { defaultPlanModeToolNames, planModeToolSelection } from "./tool-selection.js";
 
 interface SettingsMenuState {
   kind: "valid" | "invalid";
@@ -173,7 +174,7 @@ export async function showPlanModeSettings(
         lines: [
           "Changes apply when a later Plan workflow starts; model-visible tools stay unchanged.",
           "Retained inactive names resolve before that workflow's first request.",
-          "Plan mode never activates tools, and non-built-ins run at user risk.",
+          "Plan mode never activates tools; tools outside its reviewed core policy run at user risk.",
         ],
         enableSearch: true,
         viewportSize: 10,
@@ -332,7 +333,11 @@ export async function showPlanModeSettings(
       },
       "toggle-tool": async ({ ctx: actionCtx, state, itemId, selected, signal }) => {
         const tool = itemId ? toolsByItemId.get(itemId) : undefined;
-        if (!tool || !activeToolNames.has(tool.name) || !canSelectToolInPlanMode(tool)) {
+        if (
+          !tool ||
+          planModeToolAvailability(tool, activeToolNames) !== "available" ||
+          !canSelectToolInPlanMode(tool)
+        ) {
           return { kind: "rejected" };
         }
         const names = explicitToolNames(tools, state.settings.defaultPlanTools);
@@ -481,28 +486,11 @@ function defaultToolItems(
   const selected = new Set(explicitToolNames(tools, configured));
   const availableNames = new Set(tools.map((tool) => tool.name));
   const items = tools.map((tool) => {
-    const active = activeToolNames.has(tool.name);
-    const selectable = active && canSelectToolInPlanMode(tool);
-    const policy = active
-      ? toolPolicyLabel(tool)
-      : selected.has(tool.name)
-        ? "not active yet; retained for first-request resolution"
-        : "not active in this Pi session";
-    const description = tool.description ?? "No description available";
     return {
       id: toolItemIds.get(tool.name) as string,
       label: tool.name,
-      description: `${policy} · ${description}`,
-      searchText: `${policy} ${description}`,
       selected: selected.has(tool.name),
-      disabled: !selectable,
-      disabledReason: !active
-        ? selected.has(tool.name)
-          ? "Not active yet; retained and resolved before the first request"
-          : "Not active in Pi; Plan mode will not activate it"
-        : selectable
-          ? undefined
-          : "Blocked by Plan-mode policy",
+      ...planModeToolSelection(tool, activeToolNames, selected.has(tool.name)),
     };
   });
   for (const [index, name] of (configured ?? []).entries()) {

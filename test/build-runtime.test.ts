@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DefaultResourceLoader, ExtensionRunner, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { createRpcHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { listFiles, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
 import { builtinTool, createMockContext, extensionTool } from "../../../test/support.js";
+import { nativeTool } from "./tool-exposure-support.js";
 
 const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   packageId: "pi-plan-mode",
@@ -58,6 +60,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
   const agentDir = join(root, "agent");
   const output = join(root, "dist");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  let runner: ExtensionRunner | undefined;
   try {
     await builder.buildRuntime({ outputDirectory: output });
     await mkdir(agentDir, { recursive: true });
@@ -85,7 +88,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
       getBranch: () => [],
       getEntries: () => [],
     };
-    const runner = new ExtensionRunner(loaded.extensions, loaded.runtime, root, sessionManager as never, {} as never);
+    runner = new ExtensionRunner(loaded.extensions, loaded.runtime, root, sessionManager as never, {} as never);
     runner.bindCore(
       {
         sendMessage: () => undefined,
@@ -98,6 +101,7 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
         getAllTools: () => [
           builtinTool("read"),
           builtinTool("write"),
+          nativeTool("mcp__docs__read", "deferred"),
           extensionTool("plan_mode_question"),
           extensionTool("plan_mode_complete"),
         ],
@@ -138,6 +142,20 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     await runner.emit({ type: "session_start", reason: "startup" });
     const command = runner.getCommand("plan");
     assert.ok(command);
+    const rpc = createRpcHarness([
+      { kind: "select", response: "Plan policy tools (Automatic safe built-ins)" },
+      { kind: "select", response: "[ ] mcp__docs__read" },
+      { kind: "select", response: undefined },
+    ]);
+    const rpcContext = createMockContext({ mode: "rpc", hasUI: true, cwd: root, sessionManager, ...rpc.ui });
+    runner.setUIContext((rpcContext.ctx as { ui: never }).ui, "rpc");
+    await command.handler("settings", runner.createCommandContext());
+    rpc.assertConsumed();
+    assert.deepEqual(JSON.parse(await readFile(join(agentDir, "pi-plan-mode.json"), "utf8")).defaultPlanTools, [
+      "read",
+      "mcp__docs__read",
+    ]);
+    runner.setUIContext((mockContext.ctx as { ui: never }).ui, "tui");
     await command.handler("start", runner.createCommandContext());
     const complete = runner.getToolDefinition("plan_mode_complete");
     assert.ok(complete);
@@ -152,8 +170,12 @@ test("generated runtime is loadable by Pi's Jiti resource loader", async () => {
     await runner.emit({ type: "agent_settled" });
     assert.deepEqual(errors, []);
   } finally {
-    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-    await rm(root, { force: true, recursive: true });
+    try {
+      await runner?.emit({ type: "session_shutdown", reason: "quit" });
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      await rm(root, { force: true, recursive: true });
+    }
   }
 });

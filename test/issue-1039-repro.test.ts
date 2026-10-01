@@ -84,7 +84,7 @@ test("issue 1039: denied tools report inactive, unavailable, frozen, and blocked
   late.mock.rawPi.setActiveTools(["read", CUSTOM_TOOL, "plan_mode_question", "plan_mode_complete"]);
   assert.deepEqual(await callTool(late, CUSTOM_TOOL), {
     block: true,
-    reason: `Plan mode blocks tool '${CUSTOM_TOOL}' because it was not available when the active Plan workflow froze its tool policy. Exit Plan mode, then start again after the tool is active.`,
+    reason: `Plan mode blocks tool '${CUSTOM_TOOL}' because it was not available when the active Plan workflow froze its tool policy. Exit Plan mode, then start again after the tool is available.`,
   });
 
   const lateAutomatic = await startPlan({
@@ -96,7 +96,7 @@ test("issue 1039: denied tools report inactive, unavailable, frozen, and blocked
   assert.deepEqual(await callTool(lateAutomatic, "powershell"), {
     block: true,
     reason:
-      "Plan mode blocks tool 'powershell' because it was not available when the active Plan workflow froze its tool policy. Exit Plan mode, then start again after the tool is active.",
+      "Plan mode blocks tool 'powershell' because it was not available when the active Plan workflow froze its tool policy. Exit Plan mode, then start again after the tool is available.",
   });
 
   const unavailable = await startPlan({

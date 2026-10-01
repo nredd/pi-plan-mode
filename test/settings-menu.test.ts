@@ -7,8 +7,9 @@ import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-wor
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { builtinTool, createMockContext, extensionTool } from "../../../test/support.js";
-import type { PlanModeSettings } from "../src/settings.js";
+import { type PlanModeSettings, updatePlanModeSettings } from "../src/settings.js";
 import { showPlanModeSettings } from "../src/settings-menu.js";
+import { nativeTool } from "./tool-exposure-support.js";
 
 const AVAILABLE_MODELS = [
   { provider: "provider-one", id: "model-one", name: "General model" },
@@ -58,6 +59,88 @@ function menuOptions(
     ...overrides,
   };
 }
+
+test("native callable tools can be selected and saved with remapped TUI keys", async () => {
+  await withSettingsMenu(
+    async ({ settingsPath, tui, ctx, saved }) => {
+      const running = showPlanModeSettings(
+        ctx,
+        menuOptions(settingsPath, saved, {
+          tools: [nativeTool("mcp__docs__read", "codemode"), nativeTool("secret", "hidden")],
+          activeToolNames: ["secret"],
+        }),
+      );
+      try {
+        await tui.waitForOpen();
+        tui.press("tui.select.down");
+        tui.send("\u001bs");
+        await tui.waitForPending();
+        await tui.waitForOpen();
+        assert.match(tui.render().join("\n"), /callable via other tools/);
+        tui.press("tui.select.down");
+        assert.match(tui.render().join("\n"), /Hidden in Pi/);
+        tui.press("tui.select.up");
+        tui.send("\u001bs");
+        await tui.waitForPending();
+        await tui.waitForOpen();
+        assert.deepEqual(saved.at(-1)?.defaultPlanTools, ["mcp__docs__read"]);
+        assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")).defaultPlanTools, ["mcp__docs__read"]);
+      } finally {
+        tui.press("ctrl+c");
+        await running;
+      }
+    },
+    {
+      keybindings: new KeybindingsManager(TUI_KEYBINDINGS, {
+        "tui.select.confirm": "alt+s",
+        "tui.select.cancel": "alt+q",
+      }),
+    },
+  );
+});
+
+test("native callable selection rolls back a failed save and preserves unknown fields on retry", async () => {
+  await withSettingsMenu(async ({ settingsPath, tui, ctx, saved, notifications }) => {
+    const original = JSON.stringify({ defaultPlanTools: [], retained: { value: true } });
+    await writeFile(settingsPath, original);
+    let attempt = 0;
+    const running = showPlanModeSettings(
+      ctx,
+      menuOptions(settingsPath, saved, {
+        tools: [nativeTool("mcp__docs__read", "deferred")],
+        activeToolNames: [],
+        updateSettings: async (patch, options) => {
+          if (attempt++ === 0) throw new Error("disk full");
+          return updatePlanModeSettings(patch, options);
+        },
+      }),
+    );
+    try {
+      await tui.waitForOpen();
+      tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      assert.equal(await readFile(settingsPath, "utf8"), original);
+      assert.deepEqual(saved, []);
+      assert.match(tui.render().join("\n"), /\[ \] mcp__docs__read/);
+      assert.match(notifications.at(-1)?.message ?? "", /Could not save/);
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+        defaultPlanTools: ["mcp__docs__read"],
+        retained: { value: true },
+      });
+    } finally {
+      tui.press("ctrl+c");
+      await running;
+    }
+  });
+});
 
 test("Plan settings show seven flat workflow rows without materializing a missing file", async () => {
   await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
@@ -482,6 +565,33 @@ test("Invalid Plan settings are read-only and save failures roll back displayed 
     tui.press("ctrl+c");
     await running;
   });
+});
+
+test("RPC Settings persists native callable selection and keeps hidden tools unavailable", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-plan-native-settings-rpc-"));
+  const settingsPath = join(directory, "pi-plan-mode.json");
+  try {
+    const rpc = createRpcHarness([
+      { kind: "select", response: "Plan policy tools (Automatic safe built-ins)" },
+      { kind: "select", response: "[ ] mcp__docs__read" },
+      { kind: "select", response: undefined },
+    ]);
+    const context = createMockContext({ cwd: directory, mode: "rpc", hasUI: true, ...rpc.ui });
+    const saved: PlanModeSettings[] = [];
+    await showPlanModeSettings(
+      context.ctx,
+      menuOptions(settingsPath, saved, {
+        tools: [nativeTool("mcp__docs__read", "deferred"), nativeTool("secret", "hidden")],
+        activeToolNames: ["secret"],
+      }),
+    );
+    rpc.assertConsumed();
+    assert.deepEqual(saved.at(-1)?.defaultPlanTools, ["mcp__docs__read"]);
+    assert.ok(rpc.dialogs[1]?.options?.some((option) => /^\[-\] secret \(unavailable: Hidden in Pi/.test(option)));
+    assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")).defaultPlanTools, ["mcp__docs__read"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("RPC Settings changes retention and export destination with the same flat navigation", async () => {

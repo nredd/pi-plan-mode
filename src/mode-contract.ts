@@ -1,9 +1,13 @@
+import { createHash } from "node:crypto";
 import { buildPlanModePrompt } from "./prompt.js";
 
 export const MODE_CONTRACT_MESSAGE_TYPE = "plan-mode-transition";
 export const MODE_CONTRACT_VERSION = 1;
 export type PlanModeContract = "plan" | "normal";
 
+// Accept only the exact previous v1 contract, not arbitrary marker-prefixed prose.
+// This preserves retained prefixes when upgrading the native-tool policy wording.
+const PRE_NATIVE_MCP_PLAN_CONTRACT_SHA256 = "9d1dcbca0a8641ad639e54a843d1938bae14b5dab81c826e21a03fa525355f59";
 const PLAN_CONTRACT_MARKER = `[PI PLAN MODE CONTRACT v${MODE_CONTRACT_VERSION}: PLAN]`;
 const NORMAL_CONTRACT_MARKER = `[PI PLAN MODE CONTRACT v${MODE_CONTRACT_VERSION}: NORMAL]`;
 const NORMAL_CONTRACT = `${NORMAL_CONTRACT_MARKER}
@@ -39,6 +43,11 @@ export function modeContractFromMessage(message: unknown): PlanModeContract | un
   if (candidate.customType !== MODE_CONTRACT_MESSAGE_TYPE) return undefined;
   if (candidate.content === modeContractContent("plan")) return "plan";
   if (candidate.content === modeContractContent("normal")) return "normal";
+  if (
+    typeof candidate.content === "string" &&
+    createHash("sha256").update(candidate.content).digest("hex") === PRE_NATIVE_MCP_PLAN_CONTRACT_SHA256
+  )
+    return "plan";
   return undefined;
 }
 

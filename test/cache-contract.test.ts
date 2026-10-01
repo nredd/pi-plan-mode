@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
+import { nativeTool } from "./tool-exposure-support.js";
 
 interface CapturedRequest {
   phase: "normal" | "plan" | "implementation";
@@ -15,7 +16,7 @@ interface CapturedRequest {
   }>;
   providerPayload: {
     instructions: string;
-    tools: Array<{ name: string; description: unknown; parameters: unknown }>;
+    tools: Array<{ name: string; description: unknown; parameters: unknown; constrainedSampling: unknown }>;
     messages: unknown[];
   };
 }
@@ -40,7 +41,12 @@ async function captureRequest(
   );
   const orderedDefinitions = activeTools.map((name) => {
     const tool = toolByName.get(name);
-    return { name, description: tool?.description, parameters: tool?.parameters };
+    return {
+      name,
+      description: tool?.description,
+      parameters: tool?.parameters,
+      constrainedSampling: tool?.constrainedSampling,
+    };
   });
   const systemPrompt = beforeResult?.systemPrompt ?? baseSystemPrompt;
   const visibleMessages = contextResult?.messages ?? messages;
@@ -98,7 +104,12 @@ test("first-context policy resolution does not mutate late active tool schemas",
     const tool = [...allTools, ...mock.tools].find((candidate) => candidate.name === name) as
       | Record<string, unknown>
       | undefined;
-    return { name, description: tool?.description, parameters: tool?.parameters };
+    return {
+      name,
+      description: tool?.description,
+      parameters: tool?.parameters,
+      constrainedSampling: tool?.constrainedSampling,
+    };
   });
 
   const request = await captureRequest("plan", mock, context.ctx, [
@@ -108,6 +119,58 @@ test("first-context policy resolution does not mutate late active tool schemas",
   assert.deepEqual(request.activeTools, activeBeforeContext);
   assert.deepEqual(request.providerPayload.tools, definitionsBeforeContext);
   assert.deepEqual(activeToolWrites, []);
+});
+
+test("native callable admission preserves normalized request definitions and retained prefix", async () => {
+  const allTools = [
+    builtinTool("read"),
+    nativeTool("codemode", "model-only", "codemode"),
+    nativeTool("mcp__docs__read", "codemode"),
+  ];
+  const mock = createMockPi({ activeTools: ["read", "codemode"], allTools });
+  const writes: string[][] = [];
+  mock.rawPi.setActiveTools = (names) => {
+    writes.push(names);
+  };
+  planMode(mock.pi, {
+    readSettings: async () => ({
+      kind: "loaded" as const,
+      settings: { thinkingLevel: "inherit" as const, defaultPlanTools: ["codemode", "mcp__docs__read"] },
+    }),
+  });
+  const context = createMockContext();
+  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  try {
+    const prefix = [
+      { role: "user", content: "Before planning" },
+      { role: "assistant", content: "Existing response" },
+    ];
+    const normal = await captureRequest("normal", mock, context.ctx, prefix);
+    await mock.commands.get("plan")?.handler("start", context.ctx);
+    const contract = mock.sentMessages.at(-1)?.message;
+    const first = await captureRequest("plan", mock, context.ctx, [
+      ...prefix,
+      contract,
+      { role: "user", content: "Inspect" },
+    ]);
+    const second = await captureRequest("plan", mock, context.ctx, [
+      ...first.messages,
+      { role: "assistant", content: "Inspection" },
+      { role: "user", content: "Continue" },
+    ]);
+    for (const request of [first, second]) {
+      assert.equal(request.systemPrompt, normal.systemPrompt);
+      assert.deepEqual(request.providerPayload.tools, normal.providerPayload.tools);
+      assert.deepEqual(request.activePromptMetadata, normal.activePromptMetadata);
+      assert.deepEqual(request.messages.slice(0, prefix.length), prefix);
+    }
+    assert.deepEqual(second.messages.slice(0, first.messages.length), first.messages);
+    assert.match(JSON.stringify(contract), /registered codemode or deferred tools/);
+    assert.match(JSON.stringify(contract), /nested call/);
+    assert.deepEqual(writes, []);
+  } finally {
+    await mock.events.get("session_shutdown")?.[0]?.({ reason: "exit" }, context.ctx);
+  }
 });
 
 test("stable Plan helper schema keeps request fields and inactive metadata safe", async () => {
