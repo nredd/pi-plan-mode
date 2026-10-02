@@ -22,7 +22,7 @@ import {
   snapshotAvailableImplementationModels,
   toolPolicyLabel,
   updatePlanModeSettings
-} from "./chunk-LEFMH46Y.ts";
+} from "./chunk-JJF7FXDR.ts";
 
 // src/active-implementation-menu.ts
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
@@ -174,7 +174,7 @@ async function chooseReadyPlanAction(ctx) {
           return;
         }
         if (keybindings.matches(data, "tui.select.cancel")) {
-          finish("exit");
+          finish("stay");
           return;
         }
         if (keybindings.matches(data, "tui.select.down") || matchesKey(data, Key.right) || data === "	") {
@@ -1135,4 +1135,4 @@ export {
   showReadyPlanMenu,
   showSavedPlanMenu
 };
-//# sourceMappingURL=interactive-ui-4QMZN2XD.ts.map
+//# sourceMappingURL=interactive-ui-O2G2PJYW.ts.map

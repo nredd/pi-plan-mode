@@ -63,8 +63,23 @@ function planModeCompletionMarkdown(result) {
 
 ${plan}` : "";
 }
-function renderPlanModeCompletion(result) {
-  return new Markdown(planModeCompletionMarkdown(result), 0, 0, getMarkdownTheme());
+function planTitle(plan) {
+  if (typeof plan !== "string") return "plan";
+  const lines = plan.split("\n").map((line) => line.trim());
+  const heading = lines.find((line) => /^#{1,6}\s+\S/u.test(line));
+  const title = (heading ?? lines.find(Boolean) ?? "").replace(/^#{1,6}\s+/u, "").replace(/[*_`]/gu, "").trim();
+  return title || "plan";
+}
+function renderPlanModeCompletionCall(args) {
+  return { render: () => [planTitle(isRecord(args) ? args.plan : void 0)], invalidate() {
+  } };
+}
+function renderPlanModeCompletion(result, options) {
+  if (options?.expanded) return new Markdown(planModeCompletionMarkdown(result), 0, 0, getMarkdownTheme());
+  const plan = planFromCompletionDetails(result.details);
+  const line = plan ? `plan proposed \xB7 ${planTitle(plan)}` : planModeCompletionMarkdown(result).split("\n").find((text) => text.trim()) ?? "plan";
+  return { render: () => [line], invalidate() {
+  } };
 }
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -884,8 +899,6 @@ function isNodeError2(error) {
 }
 
 // src/question-tool.ts
-import { getMarkdownTheme as getMarkdownTheme2 } from "@earendil-works/pi-coding-agent";
-import { Markdown as Markdown2 } from "@earendil-works/pi-tui";
 var PLAN_MODE_QUESTION_TOOL_NAME = "plan_mode_question";
 var MAX_PLAN_MODE_RESPONSE_LENGTH = 4e3;
 var PLAN_MODE_QUESTION_PARAMS = {
@@ -1102,25 +1115,55 @@ function planModeQuestionCancelled(questions, reason, message) {
 function formatPlanModeQuestionPayload(payload) {
   return JSON.stringify(payload, null, 2);
 }
-function renderPlanModeQuestion(result) {
-  return new Markdown2(planModeQuestionMarkdown(result), 0, 0, getMarkdownTheme2());
+function textLines(lines) {
+  return { render: () => lines, invalidate() {
+  } };
 }
-function planModeQuestionMarkdown(result) {
+function renderPlanModeQuestionCall(args) {
+  return textLines([planModeQuestionCallSummary(args)]);
+}
+function planModeQuestionCallSummary(args) {
+  const questions = isRecord2(args) && Array.isArray(args.questions) ? args.questions : [];
+  const headers = questions.map((question) => isRecord2(question) ? stringField(question.header) : void 0).filter((header) => Boolean(header));
+  return headers.length > 0 ? `plan question \xB7 ${headers.join(", ")}` : "plan question";
+}
+function renderPlanModeQuestion(result, options) {
+  const text = options?.expanded ? planModeQuestionExpandedText(result) : planModeQuestionCollapsedText(result);
+  return textLines(text.split("\n"));
+}
+function planModeQuestionCollapsedText(result) {
+  const details = isPlanModeQuestionDetails(result.details) ? result.details : void 0;
+  if (!details) return singleLine(fallbackText(result));
+  if (details.cancelled) return cancelledText(details);
+  const answers = details.answers ?? [];
+  if (answers.length === 0) return singleLine(fallbackText(result));
+  return answers.map((answer) => `${answer.header} \u2192 ${singleLine(answer.answer)}`).join(" \xB7 ");
+}
+function planModeQuestionExpandedText(result) {
   const details = isPlanModeQuestionDetails(result.details) ? result.details : void 0;
   if (!details) return fallbackText(result);
-  if (details.cancelled) {
-    const reason = details.reason ? ` (${details.reason})` : "";
-    return `**Plan question cancelled${reason}**`;
+  const lines = [];
+  for (const [index, question] of details.questions.entries()) {
+    const answer = details.answers?.[index];
+    if (lines.length > 0) lines.push("");
+    lines.push(`${question.header}: ${question.question}`);
+    for (const [optionIndex, option] of question.options.entries()) {
+      const chosen = answer !== void 0 && !answer.wasCustom && answer.optionIndex === optionIndex + 1;
+      lines.push(
+        `  ${chosen ? "\u25CF" : "\u25CB"} ${option.label}${option.description ? ` -- ${option.description}` : ""}`
+      );
+    }
+    if (answer?.wasCustom) lines.push(`  \u25CF (custom) ${answer.answer}`);
+    if (answer?.note?.trim()) lines.push(`  note: ${answer.note.trim()}`);
   }
-  const answers = details.answers ?? [];
-  if (answers.length === 0) return fallbackText(result);
-  const lines = [`**Plan question** \xB7 ${answers.length} answered`, ""];
-  for (const answer of answers) {
-    const suffix = answer.wasCustom ? " (custom)" : "";
-    lines.push(`- **${answer.header}** \u2014 ${answer.answer}${suffix}`);
-    if (answer.note?.trim()) lines.push(`  - Note: ${answer.note.trim()}`);
-  }
+  if (details.cancelled) lines.push("", cancelledText(details));
   return lines.join("\n");
+}
+function cancelledText(details) {
+  return details.reason ? `cancelled (${details.reason})` : "cancelled";
+}
+function singleLine(value) {
+  return value.replace(/\s+/gu, " ").trim();
 }
 function fallbackText(result) {
   return result.content.filter((block) => block.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n").trim();
@@ -1792,6 +1835,7 @@ export {
   normalizePlanModeCompletion,
   planFromCompletionDetails,
   planModeCompleted,
+  renderPlanModeCompletionCall,
   renderPlanModeCompletion,
   PLAN_HISTORY_IMPLEMENTATION_PROMPT,
   parseProposedPlan,
@@ -1827,6 +1871,7 @@ export {
   normalizePlanModeQuestionParams,
   answerPlanModeQuestions,
   planModeQuestionCancelled,
+  renderPlanModeQuestionCall,
   renderPlanModeQuestion,
   classifyPlanModeTool,
   canSelectToolInPlanMode,
@@ -1838,4 +1883,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-LEFMH46Y.ts.map
+//# sourceMappingURL=chunk-JJF7FXDR.ts.map

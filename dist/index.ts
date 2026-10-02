@@ -42,12 +42,14 @@ import {
   readCommand,
   readPlanModeSettings,
   renderPlanModeCompletion,
+  renderPlanModeCompletionCall,
   renderPlanModeQuestion,
+  renderPlanModeQuestionCall,
   snapshotAvailableImplementationModels,
   snapshotPlanModeSelectedNames,
   toolPolicyLabel,
   updatePlanModeSettings
-} from "./chunks/chunk-LEFMH46Y.ts";
+} from "./chunks/chunk-JJF7FXDR.ts";
 
 // src/plan-mode.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
@@ -78,6 +80,38 @@ function completePlanArguments(argumentPrefix) {
   if (/\s/.test(prefix)) return null;
   const matches = PLAN_COMMAND_COMPLETIONS.filter((item) => item.value.startsWith(prefix));
   return matches.length > 0 ? [...matches] : null;
+}
+
+// src/decline-contract.ts
+var DECLINE_CONTRACT_MESSAGE_TYPE = "plan-mode-decline";
+var DECLINE_GATE_ERROR = "plan_mode_complete is blocked: the user declined the last proposed plan. Restate what changed and what is still open, then ask at least one plan_mode_question and get it answered (or wait for the user to run /plan finalize) before proposing again. Do not re-submit the plan unchanged.";
+function buildDeclineContract(declinedPlans, gated) {
+  const gate = gated ? "plan_mode_complete returns an error until a plan_mode_question has been answered or the user runs /plan finalize." : "plan_mode_complete is available again.";
+  const header = `[PI PLAN MODE: PLAN DECLINED x${declinedPlans}]`;
+  if (declinedPlans <= 1) {
+    return `${header}
+The user declined the last proposed plan (dismissed it, or replied instead of approving). Before proposing again:
+- Restate what changed and what is still open.
+- Re-verify, with non-mutating exploration, the facts the user's feedback touched.
+- Ask at least one plan_mode_question.
+${gate} A message that only asks for clarification is not approval: answer it, do not re-submit the unchanged plan.`;
+  }
+  return `${header}
+The user has declined ${declinedPlans} proposals in this workflow. Before proposing again:
+- List every thread the user raised since the last proposal as resolved or open.
+- Ask "anything else before I re-propose?".
+- Re-propose only after an explicit go-ahead from the user.
+${gate}`;
+}
+function createDeclineContractMessage(declinedPlans, gated, timestamp = 0) {
+  return {
+    role: "custom",
+    customType: DECLINE_CONTRACT_MESSAGE_TYPE,
+    content: buildDeclineContract(declinedPlans, gated),
+    display: false,
+    details: { declinedPlans, gated },
+    timestamp
+  };
 }
 
 // src/extension-runtime.ts
@@ -173,7 +207,7 @@ Every Plan-mode turn that advances or finalizes the plan must end in exactly one
 - If a material decision remains, use plan_mode_question. If interactive UI is unavailable, ask one concise plain-text question instead.
 - If the implementation plan is decision-complete, call plan_mode_complete alone as your final action. Do not call other tools in the same batch and do not emit a normal assistant response after it.
 
-If a follow-up asks only for clarification and does not change or challenge the plan, answer it directly, then call plan_mode_complete alone as the final action with the complete unchanged plan so it remains available for implementation.
+If the user declines a proposed plan (dismisses it or replies instead of approving), a decline contract follows: restate what changed, ask questions, and do not re-submit the plan until it allows.
 
 Never end with prose that merely announces you are about to present, write, or finalize the plan. Submit the actual plan with plan_mode_complete in that turn.
 
@@ -290,6 +324,9 @@ function restorePlanModeState(entries, stateEntryType) {
     latestPlan,
     latestPlanSource: enabled ? (persistedPlan ? persistedSource : void 0) ?? (recoveredPlan ? PLAN_MODE_COMPLETE_TOOL_NAME : void 0) : void 0,
     awaitingAction: enabled && latestPlan !== void 0,
+    declinedPlans: enabled ? nonNegativeInteger(entry.data.declinedPlans) : 0,
+    declineGated: enabled && entry.data.declineGated === true,
+    planDeclined: enabled && latestPlan !== void 0 && entry.data.planDeclined === true,
     savedPlan,
     activeImplementation,
     pendingImplementationRuntime,
@@ -380,6 +417,9 @@ function planCompletionSource(value) {
 }
 function fixedThinkingLevel(value) {
   return typeof value === "string" && value !== "inherit" && PLAN_MODE_THINKING_LEVELS.includes(value) ? value : void 0;
+}
+function nonNegativeInteger(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 function stringArray(value) {
   return Array.isArray(value) && value.every((item) => typeof item === "string") ? Array.from(new Set(value)) : void 0;
@@ -995,6 +1035,7 @@ var STATE_ENTRY_TYPE = "plan-mode-state";
 var RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE = "plan-mode-recovered-input";
 var BLOCKED_MUTATING_TOOLS = /* @__PURE__ */ new Set(["edit", "write", "update_plan"]);
 var DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
+var DECLINE_RESET = { declinedPlans: 0, declineGated: false, planDeclined: false };
 function planMode(pi, dependencies = {}) {
   const workflowMutex = new WorkflowMutex(pi);
   let workflowOwner;
@@ -1004,7 +1045,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-4QMZN2XD.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-O2G2PJYW.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1060,7 +1101,10 @@ function planMode(pi, dependencies = {}) {
     exportPlan,
     settings: showSettings,
     save: savePlanForLater,
-    stay: updateUi,
+    stay: (ctx) => {
+      recordPlanDecline();
+      updateUi(ctx);
+    },
     exitReady: (ctx) => {
       if (exitPlanMode(ctx)) {
         ctx.ui.notify("Plan mode disabled. Proposed plan discarded.", "info");
@@ -1075,6 +1119,7 @@ function planMode(pi, dependencies = {}) {
     label: "Plan question",
     description: "Ask one to three structured questions only when the latest effective Plan contract explicitly says /plan mode is active. Tool visibility alone does not activate Plan mode. Never call for ordinary planning requests, the writing-plans skill, roadmaps, checklists, or plan-file work.",
     parameters: PLAN_MODE_QUESTION_PARAMS,
+    renderCall: renderPlanModeQuestionCall,
     renderResult: renderPlanModeQuestion,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) {
@@ -1099,10 +1144,12 @@ function planMode(pi, dependencies = {}) {
       const sessionGeneration = menuGeneration;
       const questionWorkflowGeneration = workflowGeneration;
       const questionOwner = workflowOwner;
-      return answerPlanModeQuestions(parsed.questions, ctx, {
+      const result = await answerPlanModeQuestions(parsed.questions, ctx, {
         isCurrent: () => sessionGeneration === menuGeneration && questionWorkflowGeneration === workflowGeneration && workflowMutex.isOwner(questionOwner),
         isEnabled: () => state.enabled
       });
+      if (!result.details.cancelled) liftDeclineGate();
+      return result;
     }
   });
   pi.registerTool({
@@ -1110,11 +1157,13 @@ function planMode(pi, dependencies = {}) {
     label: "Complete plan",
     description: "Submit a decision-ready plan only when the latest effective Plan contract explicitly says /plan mode is active, and call it alone as the final action. Tool visibility alone does not activate Plan mode. Never call for ordinary planning requests, the writing-plans skill, roadmaps, checklists, or plan-file work.",
     parameters: PLAN_MODE_COMPLETE_PARAMS,
+    renderCall: renderPlanModeCompletionCall,
     renderResult: renderPlanModeCompletion,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) {
         throw new Error("plan_mode_complete is only available while Plan mode is active");
       }
+      if (state.declineGated) throw new Error(DECLINE_GATE_ERROR);
       const parsed = normalizePlanModeCompletion(params);
       if (!parsed.ok) throw new Error(parsed.error);
       acceptCompletedPlan(parsed.plan, PLAN_MODE_COMPLETE_TOOL_NAME, ctx);
@@ -1495,10 +1544,13 @@ Blocked command: ${blocked}`
       clearActiveImplementation(result.clearActiveImplementationId, ctx);
     }
     const messages = state.enabled || modeContractsRelevant ? reconcileModeContract(result.messages, state.enabled ? "plan" : "normal") : result.messages;
-    return { messages };
+    const declined = state.enabled ? state.declinedPlans ?? 0 : 0;
+    const withDecline = declined > 0 ? [...messages, createDeclineContractMessage(declined, state.declineGated === true, Date.now())] : messages;
+    return { messages: withDecline };
   });
   pi.on("input", async (event, ctx) => {
     refreshStateForFirstPrompt(ctx);
+    if (event.source !== "extension") recordPlanDecline();
     const waitsForRuntimeAdmission = activeImplementationRuntimeApplication?.sessionManager === ctx.sessionManager || pendingRuntimeAdmissionSession === ctx.sessionManager;
     const queuedInput = waitsForRuntimeAdmission ? {
       sessionManager: ctx.sessionManager,
@@ -1536,7 +1588,8 @@ Blocked command: ${blocked}`
         ...state,
         latestPlan: void 0,
         latestPlanSource: void 0,
-        awaitingAction: false
+        awaitingAction: false,
+        planDeclined: false
       };
       persistState();
       updateUi(ctx);
@@ -1555,6 +1608,12 @@ Blocked command: ${blocked}`
       if (parsedPlan.kind !== "absent") {
         ctx.ui.notify(invalidPlanMessage(parsedPlan.kind), "warning");
       }
+      persistState();
+      updateUi(ctx);
+      return;
+    }
+    if (state.declineGated) {
+      ctx.ui.notify(`Proposed plan ignored. ${DECLINE_GATE_ERROR}`, "warning");
       persistState();
       updateUi(ctx);
       return;
@@ -1617,6 +1676,7 @@ Blocked command: ${blocked}`
         ...state,
         enabled: true,
         awaitingAction: false,
+        ...DECLINE_RESET,
         savedPlan: void 0,
         activeImplementation: void 0,
         pendingImplementationRuntime: void 0,
@@ -1640,6 +1700,8 @@ Blocked command: ${blocked}`
     if (!enterPlanMode(ctx)) return;
     if (!wasEnabled) {
       ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
+    } else {
+      recordPlanDecline();
     }
     if (sendPlanModeUserMessage(prompt, ctx)) return;
     if (wasEnabled) return;
@@ -1660,6 +1722,7 @@ Blocked command: ${blocked}`
       latestPlan: void 0,
       latestPlanSource: void 0,
       awaitingAction: false,
+      ...DECLINE_RESET,
       savedPlan: void 0,
       activeImplementation: void 0,
       pendingImplementationRuntime: void 0,
@@ -1722,7 +1785,8 @@ Blocked command: ${blocked}`
       ...state,
       latestPlan: normalized.plan,
       latestPlanSource: source,
-      awaitingAction: true
+      awaitingAction: true,
+      planDeclined: false
     };
     readyPresentationIntent = {
       nonce: ++nextReadyPresentationNonce,
@@ -1758,7 +1822,23 @@ Blocked command: ${blocked}`
       return;
     }
     finalizationRequest.request(workflowGeneration);
+    liftDeclineGate();
     if (!sendPlanModeUserMessage(FINALIZE_PLAN_PROMPT, ctx)) finalizationRequest.reset();
+  }
+  function recordPlanDecline() {
+    if (!state.enabled || !state.awaitingAction || !state.latestPlan) return;
+    if (state.planDeclined) {
+      if (state.declineGated) return;
+      state = { ...state, declineGated: true };
+    } else {
+      state = { ...state, declinedPlans: (state.declinedPlans ?? 0) + 1, declineGated: true, planDeclined: true };
+    }
+    persistState();
+  }
+  function liftDeclineGate() {
+    if (!state.enabled || !state.declineGated) return;
+    state = { ...state, declineGated: false };
+    persistState();
   }
   function savePlanForLater(ctx) {
     const plan = state.enabled ? state.latestPlan?.trim() : void 0;
@@ -1780,6 +1860,7 @@ Blocked command: ${blocked}`
       latestPlan: void 0,
       latestPlanSource: void 0,
       awaitingAction: false,
+      ...DECLINE_RESET,
       savedPlan: { plan, source },
       activeImplementation: void 0,
       pendingImplementationRuntime: void 0,
@@ -1835,6 +1916,7 @@ Blocked command: ${blocked}`
       latestPlan: void 0,
       latestPlanSource: void 0,
       awaitingAction: false,
+      ...DECLINE_RESET,
       savedPlan: void 0,
       pendingImplementationRuntime: void 0,
       activeImplementation: usesConversationHistory ? void 0 : {
