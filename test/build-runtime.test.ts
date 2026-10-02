@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DefaultResourceLoader, ExtensionRunner, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
-import { listFiles, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
-import { builtinTool, createMockContext, extensionTool } from "../../../test/support.js";
+import { listFiles, registerRuntimeBuilderContract } from "./harness/runtime-builder-contract.js";
+import { builtinTool, createMockContext, extensionTool } from "./harness/support.js";
 
 const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
   packageId: "pi-plan-mode",
