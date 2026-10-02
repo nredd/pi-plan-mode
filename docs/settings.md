@@ -87,7 +87,24 @@ Settings and `/plan tools` label these rows **inactive in Pi**, not **blocked by
 Pi controls tool activation; `defaultPlanTools` only grants Plan-mode execution permission and never activates tools.
 Built-in `edit` and `write` remain policy-blocked even when active in Pi.
 
-To enable the search tools, edit Pi's user settings at `<getAgentDir()>/settings.json` (normally `~/.pi/agent/settings.json`, or `$PI_CODING_AGENT_DIR/settings.json` when configured), **not** `pi-plan-mode.json`:
+Change the Pi settings used by the current session, **not** `pi-plan-mode.json`.
+For the CLI, the user file is normally `~/.pi/agent/settings.json`, or `$PI_CODING_AGENT_DIR/settings.json` when configured.
+SDK hosts can use a different `agentDir` or a custom or in-memory `SettingsManager`; ask the host which settings source and restart procedure apply rather than assuming the CLI path.
+The picker cannot determine that source and does not display a concrete Pi settings path.
+
+**Full selection (including Pi releases before 0.99 with `defaultTools`):** plain names replace the defaults.
+If you use Pi's normal defaults, this full list preserves them and adds the search tools:
+
+```json
+{
+  "defaultTools": ["read", "bash", "edit", "write", "grep", "find", "ls"]
+}
+```
+
+If you already have a plain-name `defaultTools` list, add `"grep"`, `"find"`, and `"ls"` to it instead of replacing your custom selection with this example.
+
+**Additive selection (Pi 0.99 or newer only):** `+name` and `-name` modifiers change the inherited selection.
+With no existing `defaultTools`, use:
 
 ```json
 {
@@ -95,10 +112,11 @@ To enable the search tools, edit Pi's user settings at `<getAgentDir()>/settings
 }
 ```
 
-This setup requires Pi's `defaultTools` support; older releases without it need an upgrade before the setting takes effect.
-The extension remains usable on its supported older Pi releases without this setting.
-The `+` entries add to Pi's inherited default selection.
-If `defaultTools` already exists, append these entries to that array rather than replacing your custom selection; preserve all unrelated settings.
+On Pi 0.99+, append these modifiers to an existing non-empty `defaultTools` array to preserve custom inclusions and exclusions.
+If your existing list is `[]`, use plain names `["grep", "find", "ls"]` to enable only the search tools; a modifier-only list would restore the inherited defaults too.
+Do not use modifiers on older releases: they treat them as exact names and can disable the normal built-in tools.
+Preserve unrelated settings in either setup.
+Releases without `defaultTools` need an upgrade for this setup; the extension's older-Pi compatibility is unchanged.
 Restart Pi, then reopen `/plan settings` → **Plan policy tools** or `/plan tools` and select the tools if your Plan policy does not already allow them.
 CLI tool allowlists/exclusions can override this setting, and trusted project settings can affect the effective selection.
 If the rows remain inactive, check those overrides before changing Plan policy.

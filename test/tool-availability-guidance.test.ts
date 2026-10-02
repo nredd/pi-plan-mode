@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { getAgentDir, type ToolInfo } from "@earendil-works/pi-coding-agent";
+import { join, resolve } from "node:path";
+import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
@@ -16,6 +16,22 @@ const tools = ["read", "grep", "find", "ls", "edit", "write"].map(builtinTool) a
 tools.push(extensionTool("custom") as ToolInfo);
 const active = ["read", "edit", "plan_mode_question", "plan_mode_complete"];
 
+test("published activation examples separate full selection from Pi 0.99+ modifiers", async () => {
+  const reference = await readFile(resolve("packages/pi-plan-mode/docs/settings.md"), "utf8");
+  const activation = reference
+    .split("### Enable inactive built-in search tools in Pi")[1]
+    ?.split("### Plan reinjection")[0];
+  assert.ok(activation);
+  const examples = [...activation.matchAll(/```json\n([\s\S]*?)\n```/g)].map((match) => JSON.parse(match[1]));
+  assert.deepEqual(examples, [
+    { defaultTools: ["read", "bash", "edit", "write", "grep", "find", "ls"] },
+    { defaultTools: ["+grep", "+find", "+ls"] },
+  ]);
+  assert.match(activation, /Pi 0\.99 or newer only/);
+  assert.match(activation, /Do not use modifiers on older releases/);
+  assert.match(activation, /custom or in-memory `SettingsManager`/);
+});
+
 for (const name of ["grep", "find", "ls"]) {
   test(`inactive built-in ${name} explains Pi activation without changing metadata`, () => {
     const tool = builtinTool(name) as ToolInfo;
@@ -24,9 +40,11 @@ for (const name of ["grep", "find", "ls"]) {
       const presentation = planModeToolSelection(tool, new Set(), retained);
       assert.equal(presentation.disabled, true);
       assert.match(presentation.label ?? "", /inactive in Pi/);
-      assert.ok(presentation.disabledReason?.includes(`"+${name}"`));
+      assert.ok(presentation.disabledReason?.includes(`"${name}"`));
       assert.ok(presentation.disabledReason?.includes("defaultTools"));
-      assert.ok(presentation.disabledReason?.includes(join(getAgentDir(), "settings.json")));
+      assert.match(presentation.disabledReason ?? "", /this session's Pi settings/);
+      assert.match(presentation.disabledReason ?? "", /full.*preserve existing\/default tools/);
+      assert.doesNotMatch(presentation.disabledReason ?? "", /settings\.json|"\+(grep|find|ls)"/);
       assert.match(presentation.disabledReason ?? "", /restart Pi/);
       if (retained) assert.match(presentation.disabledReason ?? "", /retained/i);
     }
@@ -202,6 +220,7 @@ for (const route of ["settings", "tools"]) {
     const rpc = createRpcHarness([
       ...(route === "settings" ? [{ kind: "select" as const, response: "Plan policy tools (3 selected)" }] : []),
       { kind: "select", response: undefined },
+      ...(route === "settings" ? [{ kind: "select" as const, response: undefined }] : []),
     ]);
     const context = createMockContext({ mode: "rpc", hasUI: true, cwd: directory, ...rpc.ui });
     planMode(mock.pi, { settingsPath });
@@ -210,7 +229,11 @@ for (const route of ["settings", "tools"]) {
       await mock.events.get("session_start")?.[0]?.({}, context.ctx);
       await mock.commands.get("plan")?.handler(route, context.ctx);
       rpc.assertConsumed();
-      const options = rpc.dialogs.at(-1)?.options ?? [];
+      const options = rpc.dialogs[route === "settings" ? 1 : 0]?.options ?? [];
+      assert.deepEqual(
+        context.notifications.filter(({ level }) => level === "error"),
+        [],
+      );
       assert.ok(options.includes("[ ] read"));
       assert.ok(options.some((option) => /grep — inactive in Pi.*defaultTools.*restart Pi/.test(option)));
       assert.ok(options.some((option) => /custom — inactive in Pi.*retained/i.test(option)));

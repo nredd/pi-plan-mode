@@ -1,5 +1,4 @@
-import { join } from "node:path";
-import { getAgentDir, type ToolInfo } from "@earendil-works/pi-coding-agent";
+import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 import { planModeToolAvailability } from "./tool-availability.js";
 import {
   canSelectToolInPlanMode,
@@ -38,7 +37,8 @@ export function planModeToolSelection(tool: ToolInfo, activeNames: ReadonlySet<s
     case "inactive":
       unavailable = "Not active in Pi; Plan mode will not activate it";
       if (!policyBlocked && isBuiltinTool(tool) && ["grep", "find", "ls"].includes(tool.name)) {
-        unavailable += `; on Pi versions supporting defaultTools, add "+${tool.name}" in ${join(getAgentDir(), "settings.json")}, then restart Pi`;
+        // ExtensionContext does not expose host-owned Pi settings; plain names also work before Pi 0.99.
+        unavailable += `; on Pi with defaultTools support, use a full list including "${tool.name}" in this session's Pi settings (preserve existing/default tools), then restart Pi`;
       }
       if (retained) unavailable += "; retained and resolved before the first request";
       break;
