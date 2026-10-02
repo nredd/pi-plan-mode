@@ -682,6 +682,50 @@ function safeErrorDetail(error) {
   return characters.length > 500 ? `${characters.slice(0, 499).join("")}\u2026` : normalized;
 }
 
+// src/headless-turn.ts
+var HEADLESS_TURN_START_TIMEOUT_MS = 5e3;
+function createHeadlessTurns(startTimeoutMs = HEADLESS_TURN_START_TIMEOUT_MS) {
+  let armed;
+  return {
+    /** Call from `agent_start`. */
+    runStarted() {
+      if (!armed) return;
+      armed.started = true;
+      armed.onStart?.();
+    },
+    /** Call whenever a Plan-mode message was handed to `pi.sendUserMessage`. */
+    messageSent() {
+      if (armed) armed.sent = true;
+    },
+    /** Arm before running a command; `undefined` outside print/JSON mode. */
+    arm(ctx) {
+      if (ctx.mode !== "print" && ctx.mode !== "json") return void 0;
+      const turn = { sent: false, started: false };
+      armed = turn;
+      return {
+        async settle() {
+          try {
+            if (!turn.sent) return;
+            if (!turn.started) {
+              let timer;
+              const started = await new Promise((resolve) => {
+                turn.onStart = () => resolve(true);
+                timer = setTimeout(() => resolve(false), startTimeoutMs);
+                timer.unref?.();
+              });
+              clearTimeout(timer);
+              if (!started) return;
+            }
+            await ctx.waitForIdle();
+          } finally {
+            if (armed === turn) armed = void 0;
+          }
+        }
+      };
+    }
+  };
+}
+
 // src/plan-action-controller.ts
 function createPlanActionController(options) {
   const configuredDefaults = () => {
@@ -1075,6 +1119,7 @@ function planMode(pi, dependencies = {}) {
   let settingsReloadTimer;
   const implementationRetention = createImplementationRetentionCoordinator();
   const finalizationRequest = createFinalizationRequestCoordinator();
+  const headlessTurns = createHeadlessTurns(dependencies.headlessTurnStartTimeoutMs);
   const persistState = () => pi.appendEntry(STATE_ENTRY_TYPE, state);
   const planExports = createPlanExportController({
     getState: () => state,
@@ -1174,97 +1219,105 @@ function planMode(pi, dependencies = {}) {
     description: "Enter or manage Codex-like Plan mode",
     getArgumentCompletions: completePlanArguments,
     handler: async (args, ctx) => {
-      const prompt = args.trim();
-      const command = prompt.toLowerCase();
-      if (command === "start") {
-        if (savedPlanBlocksNewWorkflow(ctx, state.savedPlan !== void 0 && !state.enabled)) return;
-        if (state.enabled) {
-          ctx.ui.notify("Plan mode is already active.", "info");
-          return;
-        }
-        if (enterPlanMode(ctx)) {
-          ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
-        }
+      const turn = headlessTurns.arm(ctx);
+      try {
+        await runPlanCommand(args, ctx);
+      } finally {
+        await turn?.settle();
+      }
+    }
+  });
+  async function runPlanCommand(args, ctx) {
+    const prompt = args.trim();
+    const command = prompt.toLowerCase();
+    if (command === "start") {
+      if (savedPlanBlocksNewWorkflow(ctx, state.savedPlan !== void 0 && !state.enabled)) return;
+      if (state.enabled) {
+        ctx.ui.notify("Plan mode is already active.", "info");
         return;
       }
-      if (command === "show") {
-        showStoredPlan(pi, ctx, state);
+      if (enterPlanMode(ctx)) {
+        ctx.ui.notify("Plan mode enabled. I will explore and plan, but not modify files.", "info");
+      }
+      return;
+    }
+    if (command === "show") {
+      showStoredPlan(pi, ctx, state);
+      return;
+    }
+    if (command === "finalize") {
+      requestFinalPlan(ctx);
+      return;
+    }
+    if (command === "implement") {
+      if (!(state.enabled && state.latestPlan?.trim()) && !state.savedPlan?.plan.trim()) {
+        ctx.ui.notify("No completed plan is available to implement.", "warning");
         return;
       }
-      if (command === "finalize") {
-        requestFinalPlan(ctx);
-        return;
+      await startImplementation(ctx);
+      return;
+    }
+    if (command === "save") {
+      savePlanForLater(ctx);
+      return;
+    }
+    if (command === "settings") {
+      if (!ctx.hasUI) {
+        throw new Error("/plan settings requires TUI or RPC mode and is unavailable here.");
       }
-      if (command === "implement") {
-        if (!(state.enabled && state.latestPlan?.trim()) && !state.savedPlan?.plan.trim()) {
-          ctx.ui.notify("No completed plan is available to implement.", "warning");
-          return;
-        }
-        await startImplementation(ctx);
-        return;
-      }
-      if (command === "save") {
-        savePlanForLater(ctx);
-        return;
-      }
-      if (command === "settings") {
-        if (!ctx.hasUI) {
-          throw new Error("/plan settings requires TUI or RPC mode and is unavailable here.");
-        }
-        const lifecycle = captureMenuLifecycle();
-        await showSettings(ctx, lifecycle.signal, lifecycle.isCurrent);
-        return;
-      }
-      const exportMatch = /^export(?:\s+([\s\S]+))?$/iu.exec(prompt);
-      if (exportMatch) {
-        const lifecycle = captureMenuLifecycle();
-        await exportPlan(ctx, exportMatch[1], lifecycle.signal, lifecycle.isCurrent);
-        return;
-      }
-      if (command === "exit" || command === "off") {
-        const notification = planModeDisableNotification();
-        if (exitPlanMode(ctx)) ctx.ui.notify(notification, "info");
-        return;
-      }
-      if (command === "tools") {
-        if (savedPlanBlocksNewWorkflow(ctx, state.savedPlan !== void 0 && !state.enabled)) return;
-        if (state.enabled) {
-          const message = "Plan-mode tools are locked while Planning is active. Exit Plan mode and choose tools before starting again.";
-          if (!ctx.hasUI) throw new Error(message);
-          ctx.ui.notify(message, "warning");
-          return;
-        }
-        if (!ctx.hasUI) {
-          throw new Error("/plan tools requires TUI or RPC mode and is unavailable here.");
-        }
-        await showLaunchMenu(ctx, "tools");
-        return;
-      }
-      if (prompt) {
-        if (savedPlanBlocksNewWorkflow(ctx, state.savedPlan !== void 0 && !state.enabled)) return;
-        enterPlanModeWithPrompt(prompt, ctx);
+      const lifecycle = captureMenuLifecycle();
+      await showSettings(ctx, lifecycle.signal, lifecycle.isCurrent);
+      return;
+    }
+    const exportMatch = /^export(?:\s+([\s\S]+))?$/iu.exec(prompt);
+    if (exportMatch) {
+      const lifecycle = captureMenuLifecycle();
+      await exportPlan(ctx, exportMatch[1], lifecycle.signal, lifecycle.isCurrent);
+      return;
+    }
+    if (command === "exit" || command === "off") {
+      const notification = planModeDisableNotification();
+      if (exitPlanMode(ctx)) ctx.ui.notify(notification, "info");
+      return;
+    }
+    if (command === "tools") {
+      if (savedPlanBlocksNewWorkflow(ctx, state.savedPlan !== void 0 && !state.enabled)) return;
+      if (state.enabled) {
+        const message = "Plan-mode tools are locked while Planning is active. Exit Plan mode and choose tools before starting again.";
+        if (!ctx.hasUI) throw new Error(message);
+        ctx.ui.notify(message, "warning");
         return;
       }
       if (!ctx.hasUI) {
-        throw new Error(
-          "The interactive /plan menu is unavailable in print and JSON modes. Use /plan start or /plan <prompt>."
-        );
+        throw new Error("/plan tools requires TUI or RPC mode and is unavailable here.");
       }
-      if (!state.enabled) {
-        if (state.activeImplementation && ctx.hasUI) {
-          await showActivePlanMenu(ctx);
-          return;
-        }
-        if (state.savedPlan) {
-          await planActions.showSaved(ctx);
-          return;
-        }
-        await showLaunchMenu(ctx);
+      await showLaunchMenu(ctx, "tools");
+      return;
+    }
+    if (prompt) {
+      if (savedPlanBlocksNewWorkflow(ctx, state.savedPlan !== void 0 && !state.enabled)) return;
+      enterPlanModeWithPrompt(prompt, ctx);
+      return;
+    }
+    if (!ctx.hasUI) {
+      throw new Error(
+        "The interactive /plan menu is unavailable in print and JSON modes. Use /plan start or /plan <prompt>."
+      );
+    }
+    if (!state.enabled) {
+      if (state.activeImplementation && ctx.hasUI) {
+        await showActivePlanMenu(ctx);
         return;
       }
-      await planActions.showCurrent(ctx);
+      if (state.savedPlan) {
+        await planActions.showSaved(ctx);
+        return;
+      }
+      await showLaunchMenu(ctx);
+      return;
     }
-  });
+    await planActions.showCurrent(ctx);
+  }
   const initializePlanModeShortcut = () => {
     if (shortcutInitialized) return;
     const shortcut = configuredPlanModeToggleShortcut(settings);
@@ -1578,6 +1631,7 @@ Blocked command: ${blocked}`
     if (queuedInput) return { action: "handled" };
   });
   pi.on("agent_start", (_event, ctx) => {
+    headlessTurns.runStarted();
     if (currentSession !== ctx.sessionManager) return;
     if (pendingRuntimeAdmissionSession === ctx.sessionManager) {
       pendingRuntimeAdmissionSession = void 0;
@@ -1773,6 +1827,7 @@ Blocked command: ${blocked}`
     try {
       if (ctx.isIdle()) pi.sendUserMessage(message);
       else pi.sendUserMessage(message, { deliverAs: "followUp" });
+      headlessTurns.messageSent();
       return true;
     } catch (error) {
       const detail = safeTerminalText(error instanceof Error ? error.message : String(error));
