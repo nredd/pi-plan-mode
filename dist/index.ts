@@ -52,7 +52,7 @@ import {
 } from "./chunks/chunk-5AJTGVGI.ts";
 
 // src/plan-mode.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { randomUUID as randomUUID3 } from "node:crypto";
 import { watch } from "node:fs";
 import { basename, dirname } from "node:path";
 import { stripVTControlCharacters as stripVTControlCharacters2 } from "node:util";
@@ -161,7 +161,7 @@ function createFinalizationRequestCoordinator() {
 }
 
 // src/fresh-implementation.ts
-import { randomUUID } from "node:crypto";
+import { randomUUID as randomUUID2 } from "node:crypto";
 import { stripVTControlCharacters } from "node:util";
 
 // src/prompt.ts
@@ -296,6 +296,51 @@ function leadingSummaryBoundary(messages) {
 function unwrapMessage(message) {
   const entry = message;
   return entry?.message ?? message ?? {};
+}
+
+// src/plan-approval.ts
+import { randomUUID } from "node:crypto";
+var PLAN_APPROVED_EVENT = "pi-plan-mode:plan-approved";
+var PLAN_APPROVED_VERSION = 1;
+var PLAN_APPROVAL_ENTRY_TYPE = "plan-mode-approved-plan";
+function createPlanApproval(plan) {
+  return { version: PLAN_APPROVED_VERSION, planId: randomUUID(), plan };
+}
+function isPlanApproval(value) {
+  if (!value || typeof value !== "object") return false;
+  const v = value;
+  return v.version === PLAN_APPROVED_VERSION && typeof v.planId === "string" && typeof v.plan === "string";
+}
+function latestPlanApproval(branch) {
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    const entry = branch[index];
+    if (entry?.type === "custom" && entry.customType === PLAN_APPROVAL_ENTRY_TYPE && isPlanApproval(entry.data)) {
+      return entry.data;
+    }
+  }
+  return void 0;
+}
+function createPlanApprovals(pi) {
+  const announced = /* @__PURE__ */ new Set();
+  const announce = (ctx, approval) => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const key = `${sessionId}\0${approval.planId}`;
+    if (announced.has(key)) return;
+    announced.add(key);
+    const payload = { ...approval, sessionId };
+    pi.events.emit(PLAN_APPROVED_EVENT, payload);
+  };
+  return {
+    record(ctx, plan) {
+      const approval = createPlanApproval(plan);
+      pi.appendEntry(PLAN_APPROVAL_ENTRY_TYPE, approval);
+      announce(ctx, approval);
+    },
+    announceLatest(ctx) {
+      const approval = latestPlanApproval(ctx.sessionManager.getBranch());
+      if (approval) announce(ctx, approval);
+    }
+  };
 }
 
 // src/state.ts
@@ -484,7 +529,7 @@ async function startFreshImplementationSession(ctx, request) {
   const usesConversationHistory = request.retention === "clear-on-start";
   const pendingImplementationRuntime = pendingRuntimeIntent(request.runtime);
   const activeImplementation = usesConversationHistory ? void 0 : {
-    id: randomUUID(),
+    id: randomUUID2(),
     plan: request.plan,
     source: request.source,
     startedAt: Date.now(),
@@ -514,6 +559,7 @@ async function startFreshImplementationSession(ctx, request) {
             contract.display,
             contract.details
           );
+          sessionManager.appendCustomEntry(PLAN_APPROVAL_ENTRY_TYPE, createPlanApproval(request.plan));
           if (destinationState) {
             sessionManager.appendCustomEntry(request.stateEntryType, destinationState);
           }
@@ -1120,6 +1166,7 @@ function planMode(pi, dependencies = {}) {
   const implementationRetention = createImplementationRetentionCoordinator();
   const finalizationRequest = createFinalizationRequestCoordinator();
   const headlessTurns = createHeadlessTurns(dependencies.headlessTurnStartTimeoutMs);
+  const planApprovals = createPlanApprovals(pi);
   const persistState = () => pi.appendEntry(STATE_ENTRY_TYPE, state);
   const planExports = createPlanExportController({
     getState: () => state,
@@ -1414,6 +1461,7 @@ function planMode(pi, dependencies = {}) {
     if (!installRestoredState(restoredState, ctx)) return;
     implementationRetention.restore(state.activeImplementation);
     updateUi(ctx);
+    planApprovals.announceLatest(ctx);
     if (event.reason !== "new") await applyPendingImplementationRuntime(ctx);
   });
   pi.on("session_before_tree", (event, ctx) => {
@@ -1646,6 +1694,7 @@ Blocked command: ${blocked}`
   });
   pi.on("before_agent_start", (_event, ctx) => {
     refreshStateForFirstPrompt(ctx);
+    planApprovals.announceLatest(ctx);
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
     if (state.latestPlan || state.awaitingAction) {
       readyPresentationIntent = void 0;
@@ -1986,7 +2035,7 @@ Blocked command: ${blocked}`
       savedPlan: void 0,
       pendingImplementationRuntime: void 0,
       activeImplementation: usesConversationHistory ? void 0 : {
-        id: randomUUID2(),
+        id: randomUUID3(),
         plan,
         source,
         startedAt: Date.now(),
@@ -1999,6 +2048,7 @@ Blocked command: ${blocked}`
       restoreThinkingLevel();
       state = { ...state, manualThinkingLevel: void 0 };
     }
+    planApprovals.record(ctx, plan);
     persistState();
     updateUi(ctx);
     const handoff = usesConversationHistory ? wasEnabled ? formatHistoryImplementationPrompt() : formatTransferredPlanPrompt(plan, false) : formatImplementationHandoff(plan);
