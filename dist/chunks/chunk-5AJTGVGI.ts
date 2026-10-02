@@ -77,7 +77,7 @@ function renderPlanModeCompletionCall(args) {
 function renderPlanModeCompletion(result, options) {
   if (options?.expanded) return new Markdown(planModeCompletionMarkdown(result), 0, 0, getMarkdownTheme());
   const plan = planFromCompletionDetails(result.details);
-  const line = plan ? `plan proposed \xB7 ${planTitle(plan)}` : planModeCompletionMarkdown(result).split("\n").find((text) => text.trim()) ?? "plan";
+  const line = plan ? "plan proposed" : planModeCompletionMarkdown(result).split("\n").find((text) => text.trim()) ?? "plan";
   return { render: () => [line], invalidate() {
   } };
 }
@@ -2095,4 +2095,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-OTXT5R7I.ts.map
+//# sourceMappingURL=chunk-5AJTGVGI.ts.map
