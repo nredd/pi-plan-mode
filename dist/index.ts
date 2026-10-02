@@ -49,7 +49,7 @@ import {
   snapshotPlanModeSelectedNames,
   toolPolicyLabel,
   updatePlanModeSettings
-} from "./chunks/chunk-JJF7FXDR.ts";
+} from "./chunks/chunk-OTXT5R7I.ts";
 
 // src/plan-mode.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
@@ -1045,7 +1045,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-O2G2PJYW.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-R5GF3EZW.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1512,7 +1512,13 @@ function planMode(pi, dependencies = {}) {
       };
     }
     if (event.toolName === "bash") {
-      const blocked = findBlockedCommandSegment(readCommand(event.input), settings.safeSubcommands, ctx.cwd);
+      const blocked = findBlockedCommandSegment(
+        readCommand(event.input),
+        settings.safeSubcommands,
+        ctx.cwd,
+        process.platform,
+        settings.trustedDirectories
+      );
       if (blocked !== void 0) {
         return {
           block: true,
@@ -1522,7 +1528,12 @@ Blocked command: ${blocked}`
       }
     }
     if (event.toolName === "powershell") {
-      const blocked = findBlockedPowerShellCommandSegment(readCommand(event.input), settings.safeSubcommands, ctx.cwd);
+      const blocked = findBlockedPowerShellCommandSegment(
+        readCommand(event.input),
+        settings.safeSubcommands,
+        ctx.cwd,
+        settings.trustedDirectories
+      );
       if (blocked !== void 0) {
         return {
           block: true,

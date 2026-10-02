@@ -343,7 +343,7 @@ function findAvailableImplementationModel(models, configured) {
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 var PLAN_MODE_SETTINGS_FILE = "pi-plan-mode.json";
 var LEGACY_PLAN_MODE_SETTINGS_FILE = "plan-mode.json";
@@ -471,6 +471,11 @@ function normalizePlanModeSettings(value) {
     if (!safeSubcommands) return void 0;
     settings.safeSubcommands = safeSubcommands;
   }
+  if (Object.hasOwn(value, "trustedDirectories")) {
+    const trustedDirectories = normalizeTrustedDirectories(Reflect.get(value, "trustedDirectories"));
+    if (!trustedDirectories) return void 0;
+    settings.trustedDirectories = trustedDirectories;
+  }
   return settings;
 }
 function normalizeImplementationModel(value) {
@@ -514,6 +519,19 @@ function normalizeKeyId(value) {
     return void 0;
   }
   return normalized;
+}
+function normalizeTrustedDirectories(value) {
+  if (!Array.isArray(value)) return void 0;
+  const directories = [];
+  for (const item of value) {
+    if (typeof item !== "string") return void 0;
+    const directory = item.trim();
+    if (!directory || directory.length > MAX_PLAN_EXPORT_PATH_LENGTH || !(directory === "~" || directory.startsWith("~/") || isAbsolute(directory)) || [...directory].some((character) => (character.codePointAt(0) ?? 0) <= 31 || character === "\x7F")) {
+      return void 0;
+    }
+    if (!directories.includes(directory)) directories.push(directory);
+  }
+  return directories;
 }
 function normalizeSafeSubcommands(value) {
   if (!isSettingsDocument(value)) return void 0;
@@ -1179,7 +1197,8 @@ function stringField(value) {
 }
 
 // src/tool-policy.ts
-import { isAbsolute, normalize } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute as isAbsolute2, relative, resolve as resolve2 } from "node:path";
 var BUILTIN_SAFE_GIT_SUBCOMMANDS = [
   "status",
   "log",
@@ -1295,35 +1314,124 @@ function readCommand(input) {
   const command = input;
   return typeof command?.command === "string" ? command.command : "";
 }
-function findBlockedCommandSegment(command, safeSubcommands = {}, workingDirectory, platform = process.platform) {
-  if (matchesConfiguredSafeSubcommand(command, safeSubcommands)) return void 0;
+function findBlockedCommandSegment(command, safeSubcommands = {}, workingDirectory, platform = process.platform, trustedDirectories = [], remote = false) {
   const segments = splitShellSegments(command);
   if (!segments || segments.length === 0) return command.trim() || "(empty command)";
-  return segments.find((segment) => !isSafeSegment(segment, safeSubcommands, workingDirectory, platform));
+  const roots = allowedRoots(remote ? void 0 : workingDirectory, remote ? [] : trustedDirectories);
+  let base = remote ? void 0 : workingDirectory;
+  for (const [index, segment] of segments.entries()) {
+    if (segment.separator === "|" && isInterpreterCommand(firstWord(segment.text), INTERPRETERS)) return segment.text;
+    const tokens = shellWords(segment.text);
+    if (tokens?.[0] === "cd" && matchConfiguredPrefix(segment.text, safeSubcommands) === void 0) {
+      const target = tokens.length === 2 && !hasShellExpansion(segment.text) ? resolveDirectory(tokens[1], base, roots) : void 0;
+      if (target === void 0 || segments[index + 1]?.separator === "|") return segment.text;
+      base = target;
+      continue;
+    }
+    const paths = { base, roots };
+    if (!isSafeSegment(segment.text, safeSubcommands, paths, platform)) return segment.text;
+  }
+  return void 0;
 }
-function findBlockedPowerShellCommandSegment(command, safeSubcommands = {}, workingDirectory) {
-  if (matchesConfiguredSafeSubcommand(command, safeSubcommands)) return void 0;
+function findBlockedPowerShellCommandSegment(command, safeSubcommands = {}, workingDirectory, trustedDirectories = []) {
   const segments = splitPowerShellSegments(command);
   if (!segments || segments.length === 0) return command.trim() || "(empty command)";
-  return segments.find((segment) => !isSafePowerShellSegment(segment, safeSubcommands, workingDirectory));
+  const paths = { base: workingDirectory, roots: allowedRoots(workingDirectory, trustedDirectories) };
+  return segments.find(
+    (segment) => segment.separator === "|" && isInterpreterCommand(firstWord(segment.text), POWERSHELL_INTERPRETERS) || !isSafePowerShellSegment(segment.text, safeSubcommands, paths)
+  )?.text;
 }
-function matchesConfiguredSafeSubcommand(command, safeSubcommands) {
-  const candidate = command.trimStart();
-  return Object.entries(safeSubcommands).some(
-    ([configuredCommand, subcommands]) => subcommands?.some((subcommand) => {
+var INTERPRETERS = /* @__PURE__ */ new Set([
+  "sh",
+  "bash",
+  "zsh",
+  "dash",
+  "ksh",
+  "fish",
+  "csh",
+  "tcsh",
+  "python",
+  "node",
+  "nodejs",
+  "deno",
+  "bun",
+  "perl",
+  "ruby",
+  "php",
+  "lua",
+  "awk",
+  "gawk",
+  "mawk",
+  "osascript",
+  "pwsh",
+  "powershell",
+  "env",
+  "xargs",
+  "eval",
+  "exec",
+  "source",
+  "sudo",
+  "su"
+]);
+var POWERSHELL_INTERPRETERS = /* @__PURE__ */ new Set([
+  ...INTERPRETERS,
+  "cmd",
+  "invoke-expression",
+  "iex",
+  "invoke-command",
+  "start-process"
+]);
+function firstWord(segment) {
+  return segment.trim().split(/\s+/u, 1)[0] ?? "";
+}
+function isInterpreterCommand(word, interpreters) {
+  const name = (word.split(/[\\/]/u).pop() ?? "").toLowerCase().replace(/\.exe$/u, "");
+  return interpreters.has(name) || /^(?:python|ruby|perl|php|lua)[\d.]*$/u.test(name);
+}
+function matchConfiguredPrefix(segment, safeSubcommands) {
+  const candidate = segment.trimStart();
+  for (const [configuredCommand, subcommands] of Object.entries(safeSubcommands)) {
+    for (const subcommand of subcommands ?? []) {
       const prefix = `${configuredCommand.trim()} ${subcommand.trim()}`;
-      if (!configuredCommand.trim() || !subcommand.trim() || !candidate.startsWith(prefix)) {
-        return false;
-      }
+      if (!configuredCommand.trim() || !subcommand.trim() || !candidate.startsWith(prefix)) continue;
       const boundary = candidate[prefix.length];
-      return boundary === void 0 || /[\s;&|<>()]/.test(boundary);
-    })
-  );
+      const endsBounded = !/[A-Za-z0-9]$/u.test(prefix);
+      if (boundary === void 0 || /\s/u.test(boundary) || endsBounded) return prefix;
+    }
+  }
+  return void 0;
+}
+function expandTilde(path) {
+  if (path === "~") return homedir();
+  if (path.startsWith("~/")) return resolve2(homedir(), path.slice(2));
+  return path.startsWith("~") ? void 0 : path;
+}
+function allowedRoots(workingDirectory, trustedDirectories) {
+  const roots = [];
+  if (workingDirectory) roots.push(resolve2(workingDirectory));
+  for (const directory of trustedDirectories) {
+    const expanded = expandTilde(directory.trim());
+    if (expanded && isAbsolute2(expanded)) roots.push(resolve2(expanded));
+  }
+  return roots;
+}
+function isUnder(path, root) {
+  const difference = relative(root, path);
+  return difference === "" || !difference.startsWith("..") && !isAbsolute2(difference);
+}
+function resolveDirectory(raw, base, roots) {
+  if (!raw || raw.startsWith("-") || raw.split(/[\\/]+/u).includes("..")) return void 0;
+  const expanded = expandTilde(raw);
+  if (expanded === void 0) return void 0;
+  if (!isAbsolute2(expanded) && base === void 0) return void 0;
+  const resolved = resolve2(base ?? "/", expanded);
+  return roots.some((root) => isUnder(resolved, root)) ? resolved : void 0;
 }
 function splitPowerShellSegments(command) {
   const trimmed = command.trim();
   if (!trimmed || /[\n\r`\u2018-\u201e]/.test(trimmed)) return void 0;
   const segments = [];
+  let separator = "start";
   let quote;
   let start = 0;
   for (let index = 0; index < trimmed.length; index += 1) {
@@ -1355,17 +1463,19 @@ function splitPowerShellSegments(command) {
     if (separatorLength === 0) continue;
     const segment = trimmed.slice(start, index).trim();
     if (!segment) return void 0;
-    segments.push(segment);
+    segments.push({ text: segment, separator });
+    separator = character === "|" ? "|" : ";";
     index += separatorLength - 1;
     start = index + 1;
   }
   if (quote) return void 0;
   const finalSegment = trimmed.slice(start).trim();
   if (!finalSegment) return void 0;
-  segments.push(finalSegment);
+  segments.push({ text: finalSegment, separator });
   return segments;
 }
-function isSafePowerShellSegment(segment, safeSubcommands, workingDirectory) {
+function isSafePowerShellSegment(segment, safeSubcommands, paths) {
+  if (matchConfiguredPrefix(segment, safeSubcommands) !== void 0) return true;
   const tokens = powerShellWords(segment);
   if (!tokens || tokens.length === 0 || tokens.includes("--%")) return false;
   const command = tokens[0]?.toLowerCase();
@@ -1375,7 +1485,7 @@ function isSafePowerShellSegment(segment, safeSubcommands, workingDirectory) {
   if (command === "get-process") return isSafeGetProcessArguments(args);
   if (command === "get-service") return isSafeGetServiceArguments(args);
   if (command !== "git" && command !== "gh") return false;
-  return isSafeStructuredCommand(command, args, safeSubcommands, workingDirectory);
+  return isSafeStructuredCommand(command, args, safeSubcommands, paths);
 }
 function powerShellWords(segment) {
   const words = [];
@@ -1422,6 +1532,7 @@ function splitShellSegments(command) {
   const trimmed = command.trim();
   if (!trimmed || /[\n\r`]/.test(trimmed)) return void 0;
   const segments = [];
+  let separator = "start";
   let quote;
   let escaped = false;
   let start = 0;
@@ -1437,6 +1548,7 @@ function splitShellSegments(command) {
     }
     if (quote) {
       if (character === quote) quote = void 0;
+      else if (quote === '"' && character === "$" && trimmed[index + 1] === "(") return void 0;
       continue;
     }
     if (character === "'" || character === '"') {
@@ -1452,30 +1564,136 @@ function splitShellSegments(command) {
     if (separatorLength === 0) continue;
     const segment = trimmed.slice(start, index).trim();
     if (!segment) return void 0;
-    segments.push(segment);
+    segments.push({ text: segment, separator });
+    separator = trimmed.slice(index, index + separatorLength);
     index += separatorLength - 1;
     start = index + 1;
   }
   if (quote || escaped) return void 0;
   const finalSegment = trimmed.slice(start).trim();
   if (!finalSegment) return void 0;
-  segments.push(finalSegment);
+  segments.push({ text: finalSegment, separator });
   return segments;
 }
-function isSafeSegment(segment, safeSubcommands, workingDirectory, platform) {
-  if (hasShellExpansion(segment) || /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/.test(segment)) {
-    return false;
-  }
+function isSafeSegment(segment, safeSubcommands, paths, platform) {
+  const prefix = matchConfiguredPrefix(segment, safeSubcommands);
   const tokens = shellWords(segment);
   if (!tokens || tokens.length === 0) return false;
   const command = tokens[0]?.toLowerCase();
-  if (!command || MUTATING_COMMANDS.has(command)) return false;
+  if (!command) return false;
   const args = tokens.slice(1);
+  if (command === "ssh") return prefix !== void 0 && isSafeSshSegment(segment, prefix, safeSubcommands, platform);
+  if (command === "curl") return !hasShellExpansion(segment) && isSafeCurlArguments(args);
+  if (command === "gh" && args[0]?.toLowerCase() === "api") {
+    return !hasShellExpansion(segment) && isSafeGhApiArguments(args.slice(1));
+  }
+  if (prefix !== void 0) return true;
+  if (hasShellExpansion(segment) || /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/.test(segment)) {
+    return false;
+  }
+  if (MUTATING_COMMANDS.has(command)) return false;
   if (!hasSafeArguments(command, args)) return false;
   if (command === "hostname") return args.length === 0;
   if (command === "tasklist") return platform === "win32" && isSafeTasklistArguments(args);
   if (READ_ONLY_COMMANDS.has(command)) return true;
-  return isSafeStructuredCommand(command, args, safeSubcommands, workingDirectory);
+  return isSafeStructuredCommand(command, args, safeSubcommands, paths);
+}
+function isSafeSshSegment(segment, prefix, safeSubcommands, platform) {
+  if (hasShellExpansion(segment)) return false;
+  const remainder = segment.trimStart().slice(prefix.length);
+  const words = shellWords(remainder);
+  if (!words || words.length === 0 || words[0]?.startsWith("-")) return false;
+  return findBlockedCommandSegment(words.join(" "), safeSubcommands, void 0, platform, [], true) === void 0;
+}
+var CURL_FORBIDDEN_LONG = [
+  "--output",
+  "--remote-name",
+  "--remote-name-all",
+  "--remote-header-name",
+  "--output-dir",
+  "--create-dirs",
+  "--data",
+  "--form",
+  "--upload-file",
+  "--json",
+  "--config",
+  "--dump-header",
+  "--cookie-jar",
+  "--trace",
+  "--libcurl",
+  "--stderr",
+  "--netrc-file",
+  "--next"
+];
+var CURL_FORBIDDEN_SHORT = /* @__PURE__ */ new Set(["o", "O", "J", "d", "F", "T", "K", "D", "c"]);
+var CURL_VALUE_SHORT = /* @__PURE__ */ new Set(["A", "b", "e", "E", "H", "m", "u", "w", "x", "y", "Y", "z", "r", "C", "Q", "t"]);
+function isSafeCurlArguments(args) {
+  let index = 0;
+  const takeNext = () => {
+    index += 1;
+    return args[index];
+  };
+  for (; index < args.length; index += 1) {
+    const argument = args[index] ?? "";
+    const name = argument.split("=", 1)[0] ?? "";
+    if (argument.startsWith("--") && name.length >= 5 && "--request".startsWith(name)) {
+      const method = argument.includes("=") ? argument.slice(argument.indexOf("=") + 1) : takeNext();
+      if (method?.toUpperCase() !== "GET") return false;
+    } else if (argument.startsWith("--")) {
+      if (CURL_FORBIDDEN_LONG.some((forbidden) => forbidden.startsWith(name) || name.startsWith(`${forbidden}-`))) {
+        return false;
+      }
+    } else if (argument.startsWith("-") && argument.length > 1) {
+      for (let position = 1; position < argument.length; position += 1) {
+        const flag = argument[position] ?? "";
+        if (CURL_FORBIDDEN_SHORT.has(flag)) return false;
+        if (flag === "X") {
+          const attached = argument.slice(position + 1);
+          const method = attached || takeNext();
+          if (method?.toUpperCase() !== "GET") return false;
+          break;
+        }
+        if (CURL_VALUE_SHORT.has(flag)) {
+          if (position === argument.length - 1) index += 1;
+          break;
+        }
+      }
+    }
+  }
+  return true;
+}
+function isSafeGhApiArguments(args) {
+  const isGet = (method) => method?.toUpperCase() === "GET";
+  let index = 0;
+  const takeNext = () => {
+    index += 1;
+    return args[index];
+  };
+  for (; index < args.length; index += 1) {
+    const argument = args[index] ?? "";
+    if (argument === "graphql") return false;
+    if (argument === "--method" || argument.startsWith("--method=")) {
+      if (!isGet(argument.includes("=") ? argument.slice(argument.indexOf("=") + 1) : takeNext())) return false;
+    } else if (argument.startsWith("--")) {
+      if (["--field", "--raw-field", "--input"].some((flag) => argument === flag || argument.startsWith(`${flag}=`))) {
+        return false;
+      }
+    } else if (argument.startsWith("-") && argument.length > 1) {
+      for (let position = 1; position < argument.length; position += 1) {
+        const flag = argument[position];
+        if (flag === "f" || flag === "F") return false;
+        if (flag === "X") {
+          if (!isGet(argument.slice(position + 1) || takeNext())) return false;
+          break;
+        }
+        if ("Hqpt".includes(flag ?? "")) {
+          if (position === argument.length - 1) index += 1;
+          break;
+        }
+      }
+    }
+  }
+  return true;
 }
 function hasShellExpansion(segment) {
   let quote;
@@ -1604,8 +1822,8 @@ var GH_VALIDATORS = {
   "issue view": isSafeGhReadArguments,
   "issue list": isSafeGhReadArguments
 };
-function isSafeStructuredCommand(command, args, safeSubcommands, workingDirectory) {
-  if (command === "git") return isSafeGitCommand(args, safeSubcommands, workingDirectory);
+function isSafeStructuredCommand(command, args, safeSubcommands, paths) {
+  if (command === "git") return isSafeGitCommand(args, safeSubcommands, paths);
   if (command === "gh") return isSafeGhCommand(args, safeSubcommands);
   const subcommandIndex = args.findIndex((argument) => !argument.startsWith("-"));
   const subcommand = args[subcommandIndex]?.toLowerCase();
@@ -1690,8 +1908,8 @@ function hasSafePowerShellQueryArguments(args, switches, valueOptions) {
   }
   return true;
 }
-function isSafeGitCommand(args, safeSubcommands, workingDirectory) {
-  const subcommandIndex = parseGitGlobalOptions(args, workingDirectory);
+function isSafeGitCommand(args, safeSubcommands, paths) {
+  const subcommandIndex = parseGitGlobalOptions(args, paths);
   if (subcommandIndex === void 0) return false;
   const subcommand = args[subcommandIndex]?.toLowerCase();
   if (!subcommand || subcommand.startsWith("-")) return false;
@@ -1702,7 +1920,7 @@ function isSafeGitCommand(args, safeSubcommands, workingDirectory) {
   const validator = builtinValidator ?? (configured ? configuredValidator : void 0);
   return validator !== void 0 && hasSafeGitArguments(subcommand, subcommandArgs) && validator(subcommandArgs);
 }
-function parseGitGlobalOptions(args, workingDirectory) {
+function parseGitGlobalOptions(args, paths) {
   let index = 0;
   while (index < args.length) {
     const argument = args[index];
@@ -1711,16 +1929,10 @@ function parseGitGlobalOptions(args, workingDirectory) {
       continue;
     }
     if (argument !== "-C") break;
-    const directory = args[index + 1];
-    if (!directory || !isCurrentWorkingDirectory(directory, workingDirectory)) return void 0;
+    if (resolveDirectory(args[index + 1], paths.base, paths.roots) === void 0) return void 0;
     index += 2;
   }
   return index;
-}
-function isCurrentWorkingDirectory(directory, workingDirectory) {
-  if (!workingDirectory || directory.split(/[\\/]+/u).includes("..")) return false;
-  if (normalize(directory) === ".") return true;
-  return isAbsolute(directory) && normalize(directory) === normalize(workingDirectory);
 }
 function hasSafeGitArguments(subcommand, args) {
   return !args.some(
@@ -1883,4 +2095,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-JJF7FXDR.ts.map
+//# sourceMappingURL=chunk-OTXT5R7I.ts.map
