@@ -140,7 +140,7 @@ test("active Plan mode enforces limited policy for effective PowerShell override
   });
 });
 
-test("active Plan mode fully trusts session-loaded safe subcommands", async () => {
+test("active Plan mode trusts a session-loaded safe subcommand for its own segment only", async () => {
   await withAgentDir(async (agentDir) => {
     await writeFile(
       join(agentDir, "pi-plan-mode.json"),
@@ -163,15 +163,19 @@ test("active Plan mode fully trusts session-loaded safe subcommands", async () =
     await mock.events.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     for (const [toolName, command] of [
-      ["bash", "deploy now > release.txt && rm -rf src"],
-      ["powershell", "Invoke-Trusted run; Remove-Item -Recurse src"],
+      ["bash", "deploy now --anything && git status"],
+      ["powershell", "Invoke-Trusted run; Get-Location"],
     ] as const) {
       assert.equal(await hook({ toolName, input: { command } }, context.ctx), undefined, command);
     }
-    assert.ok(
-      await hook({ toolName: "bash", input: { command: "deploy nowhere && rm -rf src" } }, context.ctx),
-      "a partial literal prefix must remain blocked",
-    );
+    for (const [toolName, command] of [
+      ["bash", "deploy now > release.txt && rm -rf src"],
+      ["bash", "deploy now && rm -rf src"],
+      ["bash", "deploy nowhere"],
+      ["powershell", "Invoke-Trusted run; Remove-Item -Recurse src"],
+    ] as const) {
+      assert.ok(await hook({ toolName, input: { command } }, context.ctx), command);
+    }
   });
 });
 
