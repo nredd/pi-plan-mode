@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import { defineMenu, runMenu, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
 
 export interface PlanLaunchTool {
   name: string;
@@ -39,7 +39,7 @@ export async function showPlanLaunchMenu(ctx: ExtensionContext, options: PlanLau
       main: () => ({
         kind: "actions",
         title: "Plan mode",
-        lines: [options.statusText, options.toolSummary(selectedNames)],
+        lines: [options.statusText, options.toolSummary(selectedNames)].map(sanitizeTerminalText),
         items: [
           { id: "start", label: "Start Plan mode", action: "start" },
           { id: "tools", label: "Choose tools, then start…", to: "tools" },
@@ -56,17 +56,17 @@ export async function showPlanLaunchMenu(ctx: ExtensionContext, options: PlanLau
           options.toolSummary(selectedNames),
           "Available tools can be chosen now; retained names resolve before the first request.",
           "Plan mode never activates tools; tools outside its reviewed core policy run at user risk.",
-        ],
+        ].map(sanitizeTerminalText),
         enableSearch: true,
         viewportSize: 10,
         items: toolItems.map(({ id, tool }) => ({
           id,
-          label: tool.label ?? tool.name,
-          description: tool.description,
-          searchText: tool.searchText,
+          label: sanitizeTerminalText(tool.label ?? tool.name),
+          description: sanitizeTerminalText(tool.description),
+          searchText: sanitizeTerminalText(tool.searchText),
           selected: selectedNames.has(tool.name),
           disabled: tool.disabled,
-          disabledReason: tool.disabledReason,
+          disabledReason: tool.disabledReason ? sanitizeTerminalText(tool.disabledReason) : undefined,
         })),
         action: "toggle-tool",
         actions: [

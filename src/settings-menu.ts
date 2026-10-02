@@ -123,7 +123,7 @@ export async function showPlanModeSettings(
                 {
                   id: "defaultPlanTools",
                   label: "Plan policy tools",
-                  description: "Choose active tools or retain names to resolve before the first request.",
+                  description: "Choose available tools or retain names to resolve before the first request.",
                   currentValue: defaultToolsValue(state.settings.defaultPlanTools),
                   action: "open-tools",
                 },
@@ -486,11 +486,15 @@ function defaultToolItems(
   const selected = new Set(explicitToolNames(tools, configured));
   const availableNames = new Set(tools.map((tool) => tool.name));
   const items = tools.map((tool) => {
+    const presentation = planModeToolSelection(tool, activeToolNames, selected.has(tool.name));
     return {
       id: toolItemIds.get(tool.name) as string,
-      label: tool.name,
       selected: selected.has(tool.name),
-      ...planModeToolSelection(tool, activeToolNames, selected.has(tool.name)),
+      ...presentation,
+      label: sanitizeTerminalText(presentation.label),
+      description: sanitizeTerminalText(presentation.description),
+      searchText: sanitizeTerminalText(presentation.searchText),
+      disabledReason: presentation.disabledReason ? sanitizeTerminalText(presentation.disabledReason) : undefined,
     };
   });
   for (const [index, name] of (configured ?? []).entries()) {
@@ -514,7 +518,7 @@ function explicitToolNames(tools: readonly ToolInfo[], configured: string[] | un
 }
 
 function terminalToolName(value: string) {
-  const safe = safeTerminalText(value) || "(unnamed tool)";
+  const safe = sanitizeTerminalText(value).trim() || "(unnamed tool)";
   return safe.length > 120 ? `${safe.slice(0, 119)}…` : safe;
 }
 

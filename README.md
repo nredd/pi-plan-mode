@@ -373,6 +373,7 @@ The shortcut is disabled unless configured; enabling, changing, or removing it t
 Until then, the current shortcut binding stays unchanged.
 Settings saves apply to later workflows; an active implementation keeps its captured reinjection policy.
 The export destination affects the next export immediately.
+Inactive built-in `grep`, `find`, and `ls` must be [enabled in Pi settings](./docs/settings.md#enable-inactive-built-in-search-tools-in-pi); Plan policy only grants execution permission.
 
 > [!WARNING]
 > `safeSubcommands` is a JSON-only full-command trust override, not a read-only allowlist.

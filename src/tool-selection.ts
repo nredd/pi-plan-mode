@@ -31,12 +31,16 @@ export function toolPolicyLabel(tool: ToolInfo) {
 
 export function planModeToolSelection(tool: ToolInfo, activeNames: ReadonlySet<string>, retained: boolean) {
   const availability = planModeToolAvailability(tool, activeNames);
+  const policyBlocked = !canSelectToolInPlanMode(tool);
   let unavailable: string | undefined;
   switch (availability) {
     case "inactive":
-      unavailable = retained
-        ? "Not active yet; retained and resolved before the first request"
-        : "Not active in Pi; Plan mode will not activate it";
+      unavailable = "Not active in Pi; Plan mode will not activate it";
+      if (!policyBlocked && isBuiltinTool(tool) && ["grep", "find", "ls"].includes(tool.name)) {
+        // ExtensionContext does not expose host-owned Pi settings; plain names also work before Pi 0.99.
+        unavailable += `; on Pi with defaultTools support, use a full list including "${tool.name}" in this session's Pi settings (preserve existing/default tools), then restart Pi`;
+      }
+      if (retained) unavailable += "; retained and resolved before the first request";
       break;
     case "hidden":
       unavailable = "Hidden in Pi; retained selection cannot enable it";
@@ -46,15 +50,21 @@ export function planModeToolSelection(tool: ToolInfo, activeNames: ReadonlySet<s
       break;
   }
   const policy =
-    unavailable ??
+    (policyBlocked ? undefined : unavailable) ??
     [
       toolPolicyLabel(tool),
       ...(tool.exposure === "codemode" || tool.exposure === "deferred" ? ["callable via other tools"] : []),
       ...(tool.exposure === "model-only" ? ["model calls only"] : []),
     ].join(" · ");
   const description = tool.description ?? "No description available";
-  const disabledReason = unavailable ?? (canSelectToolInPlanMode(tool) ? undefined : "Blocked by Plan-mode policy");
+  const disabledReason = policyBlocked ? "Blocked by Plan-mode policy" : unavailable;
+  const label = policyBlocked
+    ? `${tool.name} — blocked by Plan policy`
+    : availability === "inactive"
+      ? `${tool.name} — inactive in Pi`
+      : tool.name;
   return {
+    label,
     description: `${policy} · ${description}`,
     searchText: `${policy} ${description}`,
     disabled: disabledReason !== undefined,
