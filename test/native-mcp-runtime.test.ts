@@ -13,6 +13,7 @@ import {
   ModelRuntime,
   SessionManager,
   SettingsManager,
+  VERSION,
 } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 
@@ -39,6 +40,24 @@ test("native MCP calls use Plan's opt-in policy through the real nested tool pip
           "mcp__fixture__deferred",
           "mcp__fixture__cd_deferred",
         ],
+      }),
+    );
+    await writeFile(
+      join(agentDir, "mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          fixture: {
+            command: process.execPath,
+            args: [resolve("packages/pi-plan-mode/test/fixtures/native-mcp-server.mjs"), callLog],
+            exposure: "codemode",
+            toolExposure: {
+              direct: "direct",
+              deferred: "deferred",
+              cd_deferred: "codemode-deferred",
+              hidden: "hidden",
+            },
+          },
+        },
       }),
     );
     process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -99,28 +118,8 @@ test("native MCP calls use Plan's opt-in policy through the real nested tool pip
         {
           name: "mcp",
           builtin: true,
-          factory: createMcpExtension({
-            loadConfig: () => ({
-              errors: [],
-              servers: [
-                {
-                  name: "fixture",
-                  source: "local fixture",
-                  config: {
-                    command: process.execPath,
-                    args: [resolve("packages/pi-plan-mode/test/fixtures/native-mcp-server.mjs"), callLog],
-                    exposure: "codemode",
-                    toolExposure: {
-                      direct: "direct",
-                      deferred: "deferred",
-                      cd_deferred: "codemode-deferred",
-                      hidden: "hidden",
-                    },
-                  },
-                },
-              ],
-            }),
-          }),
+          // Use Pi's config loader so legacy exposure aliases are normalized.
+          factory: createMcpExtension(),
         },
       ],
     });
@@ -146,7 +145,9 @@ test("native MCP calls use Plan's opt-in policy through the real nested tool pip
     const metadata = new Map(session.getAllTools().map((tool) => [tool.name, tool]));
     for (const [name, exposure] of Object.entries({
       direct: "direct",
-      callable: "codemode",
+      // Pi 1.0 maps MCP codemode exposure to deferred; earlier Pi lists it inline.
+      // Keep the exact expectation for each contract while testing the same policy.
+      callable: Number(VERSION.split(".")[0]) >= 1 ? "deferred" : "codemode",
       deferred: "deferred",
       cd_deferred: "deferred",
       hidden: "hidden",
