@@ -1,5 +1,13 @@
 # @narumitw/pi-plan-mode
 
+## 0.58.4
+
+### Patch Changes
+
+- 9621cda: Distinguish inactive Pi tools from Plan-policy blocks in Settings and the pre-start picker, and explain how to enable built-in search tools through Pi settings without changing tool activation or execution policy.
+- dbc6e8e: Allow explicit selection of native MCP and orchestration tools in Plan Mode. Honor registered callable exposure without direct activation while preserving automatic core defaults, frozen workflow policies, and per-call nested safety checks.
+- acb3aaf: Allow case-insensitive inspection flags such as `rg -i` and `grep -i` in the Plan mode shell policy.
+
 ## 0.58.3
 
 ### Patch Changes
