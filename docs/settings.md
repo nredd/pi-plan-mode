@@ -182,22 +182,32 @@ Tree navigation and compaction do not apply pending shortcut changes.
 
 ### Safe shell subcommands
 
-`safeSubcommands` maps any command prefix to subcommand prefixes that the user chooses to trust completely in limited `bash` and `powershell`.
-For example, `"kubectl": ["get", "apply"]` trusts commands beginning with `kubectl get` or `kubectl apply`, while `"npm": ["run inspect-custom"]` trusts commands beginning with `npm run inspect-custom`.
+`safeSubcommands` maps command prefixes to subcommand prefixes that the user chooses to trust within individual parsed segments of limited `bash` and `powershell` commands.
+For example, `"kubectl": ["get", "apply"]` trusts segments beginning with `kubectl get` or `kubectl apply`, while `"npm": ["run inspect-custom"]` trusts segments beginning with `npm run inspect-custom`.
 Command keys and subcommand entries are trimmed and must be non-empty strings.
-Matches are literal and case-sensitive after leading whitespace in the submitted command is ignored.
-A match requires the complete `<command> <subcommand>` prefix followed by whitespace, a shell control operator, or the end of the submitted command, so `"kubectl": ["apply"]` does not match `kubectl applies`.
+Matches are literal and case-sensitive after surrounding whitespace in each segment is removed.
+A match requires the complete `<command> <subcommand>` prefix followed by a token boundary, so `"kubectl": ["apply"]` does not match `kubectl applies`; extra whitespace or quotes inside the prefix do not match.
 Duplicate values and command keys that become equal after trimming are merged in first-seen order.
 Omitted `safeSubcommands`, an empty object, and empty arrays preserve the default policy.
 
-When a configured prefix matches, Plan mode permits the complete submitted command without parsing or applying any command, argument, mutation, chain, redirect, expansion, substitution, multiline, or PowerShell syntax checks.
-For example, `"kubectl": ["apply"]` also permits `kubectl apply -f deployment.yaml && rm -rf build`.
-Likewise, `"gh": ["pr view"]` permits `gh pr view 218 --web`, `gh pr view 218 > pr.txt`, and any trailing shell content.
-The setting therefore delegates the complete shell decision to the user and can allow arbitrary code execution with Pi's permissions.
+Plan mode parses the complete submission before considering any configured exemption.
+Bash supports `&&`, `||`, `;`, and `|`; PowerShell supports `;` and `|`, not `&&` or `||`.
+Every segment must either match its own configured prefix or pass the built-in reviewed policy, regardless of its position in the chain.
+For example, `"kubectl": ["apply"]` permits `git status && kubectl apply -f deployment.yaml` but does not permit `kubectl apply -f deployment.yaml && rm -rf build` unless the second segment is also explicitly trusted.
+Parser-unsupported syntax remains blocked even after a trusted prefix, including unquoted redirects, multiline input, and unquoted substitutions such as `kubectl apply $(cat generated-args)`.
+
+A matching segment bypasses command and argument checks: `"gh": ["pr view"]` still permits `gh pr view 218 --web`, and `"kubectl": ["apply"]` still permits deployment changes.
+Parser-accepted Bash arguments remain trusted, including variable expansion and double-quoted substitutions; an argument such as `"$(touch output)"` can itself execute code.
+The setting can therefore allow arbitrary code execution with Pi's permissions within a trusted segment.
 It is not a sandbox, confirmation gate, or read-only guarantee.
 Choose entries that are as specific as your workflow permits, and configure them only for commands and repositories you fully trust.
 
-Commands that do not match still use the built-in fail-closed reviewed policy.
+**Migration from whole-command trust:** a configured prefix no longer exempts trailing commands or unsupported syntax.
+Simple configured commands continue to work; for supported chains, each additional segment must be reviewed independently or explicitly trusted through its own narrow entry.
+Run workflows requiring redirects, multiline input, or other unsupported syntax outside Plan mode after review rather than relying on the old bypass.
+The JSON schema and settings file do not need migration.
+
+Segments that do not match still use the built-in fail-closed reviewed policy.
 That default policy includes Git `status`, `log`, `diff`, `show`, `branch`, `remote`, `ls-files`, and `grep`, with command-specific argument checks.
 It rejects output and input redirects, shell expansion and substitution, explicit pager or browser requests, explicit external diff, textconv, filter, or signature helpers, mutating flags, malformed command layouts, and any parsed chain containing an unsafe segment.
 Read-dominant Git validators accept ordinary inspection flags without requiring `--no-textconv` or `--no-ext-diff`; Git may therefore invoke a helper configured by the user or trusted repository even when the command does not request one explicitly.
@@ -206,7 +216,7 @@ Mixed read/write surfaces remain narrower: use `git remote show -n` to avoid inv
 
 Read-only does not mean private: Git inspection can expose repository history and tracked secrets, while configured commands can expose or modify any data available to Pi's process.
 A built-in-policy `git -C <path>` inspection is accepted only when the path keeps Git in Pi's current working directory.
-The default policy reduces accidental mutation and cross-repository executable configuration; configured `safeSubcommands` bypass that protection.
+The default policy reduces accidental mutation and cross-repository executable configuration; configured `safeSubcommands` bypass command and argument protection only within matching segments.
 A non-object `safeSubcommands`, empty command or subcommand string, non-array value, or non-string entry invalidates the entire settings file and triggers the normal warning/default fallback on session start.
 
 ### Thinking level

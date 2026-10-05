@@ -156,7 +156,8 @@ Use canonical cmdlet names because PowerShell aliases are intentionally outside 
 A rejected parsed command list or pipeline identifies its first blocked command segment; malformed or unsupported shell syntax reports the complete submitted input instead.
 Tests and builds may still write ignored caches or build artifacts and may execute project-defined hooks; enable or invoke them only when the repository is trusted.
 Both limited-shell policies reduce risk but do not provide an OS sandbox or confidentiality boundary.
-A configured `safeSubcommands` match bypasses both policies completely, so use it only when you intend to trust the entire submitted shell command.
+A configured `safeSubcommands` match trusts only its parsed command segment and arguments; neighboring segments must pass their own policy, and parser-unsupported syntax remains blocked.
+Trusted commands can still mutate data or execute code with Pi's permissions; see [safe shell subcommands](./docs/settings.md#safe-shell-subcommands) for the trust boundary and migration guidance.
 
 ## 🧭 Planning and implementation
 
@@ -376,9 +377,9 @@ The export destination affects the next export immediately.
 Inactive built-in `grep`, `find`, and `ls` must be [enabled in Pi settings](./docs/settings.md#enable-inactive-built-in-search-tools-in-pi); Plan policy only grants execution permission.
 
 > [!WARNING]
-> `safeSubcommands` is a JSON-only full-command trust override, not a read-only allowlist.
-> A matching prefix bypasses all shell checks, including checks on trailing commands, redirects, and mutations.
-> Configure it only for commands and repositories you fully trust.
+> `safeSubcommands` is a JSON-only segment-scoped trust override, not a read-only allowlist.
+> It trusts a matching command and its arguments, not trailing commands or parser-unsupported syntax such as redirects.
+> Configure it only for commands and repositories you fully trust; trusted arguments can still cause mutation or code execution.
 
 Saves are ordered within one Pi process, preserve unknown fields, and publish atomically; separate Pi processes can still race.
 Invalid settings remain untouched and make Settings read-only; session-start failures use safe defaults.

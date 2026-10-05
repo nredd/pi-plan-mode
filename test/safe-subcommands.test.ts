@@ -140,13 +140,15 @@ test("active Plan mode enforces limited policy for effective PowerShell override
   });
 });
 
-test("active Plan mode fully trusts session-loaded safe subcommands", async () => {
+test("active Plan mode scopes session-loaded safe subcommands to each segment", async () => {
   await withAgentDir(async (agentDir) => {
     await writeFile(
       join(agentDir, "pi-plan-mode.json"),
       JSON.stringify({
         safeSubcommands: {
           deploy: ["now"],
+          go: ["version", "list"],
+          gofmt: ["-l", "-d"],
           "Invoke-Trusted": ["run"],
         },
       }),
@@ -163,15 +165,41 @@ test("active Plan mode fully trusts session-loaded safe subcommands", async () =
     await mock.events.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     for (const [toolName, command] of [
-      ["bash", "deploy now > release.txt && rm -rf src"],
-      ["powershell", "Invoke-Trusted run; Remove-Item -Recurse src"],
+      ["bash", "deploy now --write"],
+      ["bash", "git status && deploy now"],
+      ["bash", "go version && go list ./... | head -1"],
+      ["powershell", "Invoke-Trusted run --write"],
+      ["powershell", "Get-Location; Invoke-Trusted run | Out-String"],
     ] as const) {
       assert.equal(await hook({ toolName, input: { command } }, context.ctx), undefined, command);
     }
-    assert.ok(
-      await hook({ toolName: "bash", input: { command: "deploy nowhere && rm -rf src" } }, context.ctx),
-      "a partial literal prefix must remain blocked",
-    );
+    for (const [toolName, command, blocked] of [
+      ["bash", "go version && chmod 000 /tmp/nonexistent-probe", "chmod 000 /tmp/nonexistent-probe"],
+      ["bash", "go list ./... ; touch /tmp/nonexistent-probe", "touch /tmp/nonexistent-probe"],
+      ["bash", "gofmt -l server && git push origin main", "git push origin main"],
+      ["bash", "deploy now && git status | touch output", "touch output"],
+      ["bash", "deploy nowhere && rm -rf src", "deploy nowhere"],
+      ["powershell", "Invoke-Trusted run; Remove-Item -Recurse src", "Remove-Item -Recurse src"],
+      ["powershell", "Invoke-Trusted run | Remove-Item src", "Remove-Item src"],
+    ] as const) {
+      assert.deepEqual(await hook({ toolName, input: { command } }, context.ctx), {
+        block: true,
+        reason: `Plan mode blocks ${toolName === "bash" ? "bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments" : "PowerShell commands outside its reviewed inspection policy or containing explicitly unsafe syntax"}.\nBlocked command: ${blocked}`,
+      });
+    }
+    for (const [toolName, command] of [
+      ["bash", "deploy now > release.txt && rm -rf src"],
+      ["bash", "go version && ls > /tmp/out"],
+      ["bash", "go version $(touch output)"],
+      ["bash", "go version\ntouch output"],
+      ["powershell", "Invoke-Trusted run > release.txt"],
+      ["powershell", "Invoke-Trusted run $(Remove-Item src)"],
+    ] as const) {
+      assert.deepEqual(await hook({ toolName, input: { command } }, context.ctx), {
+        block: true,
+        reason: `Plan mode blocks ${toolName === "bash" ? "bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments" : "PowerShell commands outside its reviewed inspection policy or containing explicitly unsafe syntax"}.\nBlocked command: ${command}`,
+      });
+    }
   });
 });
 

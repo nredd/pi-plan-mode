@@ -148,7 +148,6 @@ export function findBlockedCommandSegment(
   workingDirectory?: string,
   platform: NodeJS.Platform = process.platform,
 ): string | undefined {
-  if (matchesConfiguredSafeSubcommand(command, safeSubcommands)) return undefined;
   const segments = splitShellSegments(command);
   if (!segments || segments.length === 0) return command.trim() || "(empty command)";
   return segments.find((segment) => !isSafeSegment(segment, safeSubcommands, workingDirectory, platform));
@@ -168,7 +167,6 @@ export function findBlockedPowerShellCommandSegment(
   safeSubcommands: SafeSubcommands = {},
   workingDirectory?: string,
 ): string | undefined {
-  if (matchesConfiguredSafeSubcommand(command, safeSubcommands)) return undefined;
   const segments = splitPowerShellSegments(command);
   if (!segments || segments.length === 0) return command.trim() || "(empty command)";
   return segments.find((segment) => !isSafePowerShellSegment(segment, safeSubcommands, workingDirectory));
@@ -244,6 +242,7 @@ function splitPowerShellSegments(command: string): string[] | undefined {
 }
 
 function isSafePowerShellSegment(segment: string, safeSubcommands: SafeSubcommands, workingDirectory?: string) {
+  if (matchesConfiguredSafeSubcommand(segment, safeSubcommands)) return true;
   const tokens = powerShellWords(segment);
   if (!tokens || tokens.length === 0 || tokens.includes("--%")) return false;
   const command = tokens[0]?.toLowerCase();
@@ -351,6 +350,7 @@ function isSafeSegment(
   workingDirectory: string | undefined,
   platform: NodeJS.Platform,
 ) {
+  if (matchesConfiguredSafeSubcommand(segment, safeSubcommands)) return true;
   if (hasShellExpansion(segment) || /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/.test(segment)) {
     return false;
   }
