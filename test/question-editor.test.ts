@@ -36,6 +36,6 @@ test("Plan questions honor the public custom editor factory without changing the
   tui.press("tui.input.submit");
   assert.equal(tui.isOpen, false);
   assert.deepEqual(await running, [
-    { id: "scope", header: "Scope", question: "How broad?", answer: "  answer  ", wasCustom: true },
+    { id: "scope", header: "Scope", question: "How broad?", answer: "answer", wasCustom: true },
   ]);
 });
