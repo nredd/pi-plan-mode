@@ -4,6 +4,7 @@ import {
   IMPLEMENTATION_PLAN_RETENTIONS,
   MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH,
   PLAN_HISTORY_IMPLEMENTATION_PROMPT,
+  PLAN_MESSAGE_TYPE,
   PLAN_MODE_COMPLETE_PARAMS,
   PLAN_MODE_COMPLETE_TOOL_NAME,
   PLAN_MODE_QUESTION_PARAMS,
@@ -13,6 +14,7 @@ import {
   awaitPlanModeSettingsWrites,
   canSelectToolInPlanMode,
   classifyPlanModeTool,
+  clearPlanModeUi,
   compareTools,
   configuredImplementationModel,
   configuredImplementationPlanRetention,
@@ -39,17 +41,21 @@ import {
   planModeCompleted,
   planModeQuestionCancelled,
   planModeSettingsPath,
+  planModeStatusText,
   readCommand,
   readPlanModeSettings,
+  renderPlanMessage,
   renderPlanModeCompletion,
   renderPlanModeCompletionCall,
   renderPlanModeQuestion,
   renderPlanModeQuestionCall,
+  showStoredPlan,
   snapshotAvailableImplementationModels,
   snapshotPlanModeSelectedNames,
   toolPolicyLabel,
-  updatePlanModeSettings
-} from "./chunks/chunk-5AJTGVGI.ts";
+  updatePlanModeSettings,
+  updatePlanModeUi
+} from "./chunks/chunk-PLQPDFJY.ts";
 
 // src/plan-mode.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
@@ -902,114 +908,6 @@ function createPlanExportController(options) {
   };
 }
 
-// src/presentation.ts
-import { stripTerminalSequences, truncateToWidth } from "@earendil-works/pi-tui";
-var STATUS_KEY = "plan-mode";
-var PLAN_WIDGET_KEY = "plan-mode-plan";
-var BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
-function updatePlanModeUi(ctx, state, toolSummary) {
-  ctx.ui.setStatus(STATUS_KEY, formatStatus(state, ctx));
-  void toolSummary;
-  let lines;
-  if (state.enabled && state.latestPlan) {
-    lines = ["Plan ready \u2014 /plan to implement, save, revise, or exit"];
-  } else if (state.savedPlan) {
-    lines = ["Plan saved \u2014 /plan to show, implement, or clear"];
-  }
-  publishPlanModeWidget(ctx, lines);
-}
-function renderPlanModeWidget(lines, theme, width) {
-  const renderWidth = Math.max(0, width);
-  return [
-    theme.fg("borderMuted", "\u2500".repeat(renderWidth)),
-    ...lines.map((line) => truncateToWidth(sanitizePlanModeWidgetLine(line), renderWidth, ""))
-  ];
-}
-function sanitizePlanModeWidgetLine(value) {
-  let text = "";
-  for (const character of stripTerminalSequences(value).replace(BIDI_CONTROLS, "")) {
-    const codePoint = character.codePointAt(0) ?? 0;
-    const isControl = codePoint <= 31 || codePoint >= 127 && codePoint <= 159;
-    text += isControl ? " " : character;
-  }
-  return text;
-}
-function clearPlanModeUi(ctx) {
-  ctx.ui.setStatus(STATUS_KEY, void 0);
-  ctx.ui.setWidget(PLAN_WIDGET_KEY, void 0);
-}
-function showStoredPlan(pi, ctx, state) {
-  const readyPlan = state.enabled ? state.latestPlan?.trim() : void 0;
-  const savedPlan = state.savedPlan?.plan.trim();
-  if (savedPlan && (ctx.mode === "print" || ctx.mode === "json")) {
-    throw new Error("Saved plan display is unavailable in print/JSON mode. Use TUI or RPC.");
-  }
-  const activePlan = state.activeImplementation?.plan.trim();
-  const plan = readyPlan ?? savedPlan ?? activePlan;
-  if (!plan) {
-    ctx.ui.notify("No completed plan is available. Use /plan finalize when planning is complete.", "info");
-    return;
-  }
-  const title = readyPlan ? "Proposed Plan" : savedPlan ? "Saved Plan" : "Active Implementation Plan";
-  showPlanModePlan(pi, ctx, title, plan);
-}
-function showPlanModePlan(pi, ctx, title, plan) {
-  try {
-    pi.sendMessage(
-      {
-        customType: "proposed-plan",
-        content: `**${title}**
-
-${plan}`,
-        display: true
-      },
-      { triggerTurn: false }
-    );
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    ctx.ui.notify(`Unable to show completed plan: ${detail}`, "error");
-  }
-}
-function planModeStatusText(state, toolSummary) {
-  if (state.enabled) {
-    if (state.latestPlan) {
-      return `Plan mode is active and a proposed plan is ready. ${toolSummary()}`;
-    }
-    return `Plan mode is active. ${toolSummary()} Explore, ask, and finish with plan_mode_complete when decision-ready.`;
-  }
-  if (state.savedPlan) return "A plan is saved for later.";
-  if (state.activeImplementation) return "An implementation plan is active.";
-  return "Plan mode is off.";
-}
-function publishPlanModeWidget(ctx, lines) {
-  if (!lines) {
-    ctx.ui.setWidget(PLAN_WIDGET_KEY, void 0);
-    return;
-  }
-  if (ctx.mode !== "tui") {
-    ctx.ui.setWidget(PLAN_WIDGET_KEY, [...lines]);
-    return;
-  }
-  const snapshot = [...lines];
-  ctx.ui.setWidget(PLAN_WIDGET_KEY, (_tui, theme) => ({
-    render: (width) => renderPlanModeWidget(snapshot, theme, width),
-    invalidate: () => {
-    }
-  }));
-}
-function formatStatus(state, ctx) {
-  let text;
-  if (state.enabled) {
-    text = state.awaitingAction || state.latestPlan ? "plan ready" : "plan active";
-  } else if (state.savedPlan) {
-    text = "plan saved";
-  } else if (state.activeImplementation) {
-    text = "plan implementing";
-  }
-  if (!text) return void 0;
-  return ctx.ui.theme.fg("accent", text);
-}
-
 // src/required-tools.ts
 var REQUIRED_PLAN_MODE_TOOL_NAMES = [PLAN_MODE_QUESTION_TOOL_NAME, PLAN_MODE_COMPLETE_TOOL_NAME];
 function planModeHelperToolsAvailable(toolNames) {
@@ -1135,7 +1033,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-FQ54JG3I.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-LQLNIGOV.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1206,6 +1104,7 @@ function planMode(pi, dependencies = {}) {
       if (exitPlanMode(ctx)) ctx.ui.notify("Saved plan cleared.", "info");
     }
   });
+  pi.registerMessageRenderer(PLAN_MESSAGE_TYPE, renderPlanMessage);
   pi.registerTool({
     name: PLAN_MODE_QUESTION_TOOL_NAME,
     label: "Plan question",

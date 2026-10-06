@@ -85,10 +85,151 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// src/presentation.ts
+import {
+  getMarkdownTheme as getMarkdownTheme2
+} from "@earendil-works/pi-coding-agent";
+import { Markdown as Markdown2, stripTerminalSequences, truncateToWidth } from "@earendil-works/pi-tui";
+var STATUS_KEY = "plan-mode";
+var PLAN_MESSAGE_TYPE = "proposed-plan";
+var PLAN_MESSAGE_VERSION = 1;
+var PLAN_WIDGET_KEY = "plan-mode-plan";
+var BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+function updatePlanModeUi(ctx, state, toolSummary) {
+  ctx.ui.setStatus(STATUS_KEY, formatStatus(state, ctx));
+  void toolSummary;
+  let lines;
+  if (state.enabled && state.latestPlan) {
+    lines = ["Plan ready \u2014 /plan to implement, save, revise, or exit"];
+  } else if (state.savedPlan) {
+    lines = ["Plan saved \u2014 /plan to show, implement, or clear"];
+  }
+  publishPlanModeWidget(ctx, lines);
+}
+function renderPlanModeWidget(lines, theme, width) {
+  const renderWidth = Math.max(0, width);
+  return [
+    theme.fg("borderMuted", "\u2500".repeat(renderWidth)),
+    ...lines.map((line) => truncateToWidth(sanitizePlanModeWidgetLine(line), renderWidth, ""))
+  ];
+}
+function sanitizePlanModeWidgetLine(value) {
+  let text = "";
+  for (const character of stripTerminalSequences(value).replace(BIDI_CONTROLS, "")) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    const isControl = codePoint <= 31 || codePoint >= 127 && codePoint <= 159;
+    text += isControl ? " " : character;
+  }
+  return text;
+}
+function clearPlanModeUi(ctx) {
+  ctx.ui.setStatus(STATUS_KEY, void 0);
+  ctx.ui.setWidget(PLAN_WIDGET_KEY, void 0);
+}
+function showStoredPlan(pi, ctx, state) {
+  const readyPlan = state.enabled ? state.latestPlan?.trim() : void 0;
+  const savedPlan = state.savedPlan?.plan.trim();
+  if (savedPlan && (ctx.mode === "print" || ctx.mode === "json")) {
+    throw new Error("Saved plan display is unavailable in print/JSON mode. Use TUI or RPC.");
+  }
+  const activePlan = state.activeImplementation?.plan.trim();
+  const plan = readyPlan ?? savedPlan ?? activePlan;
+  if (!plan) {
+    ctx.ui.notify("No completed plan is available. Use /plan finalize when planning is complete.", "info");
+    return;
+  }
+  const title = readyPlan ? "Proposed Plan" : savedPlan ? "Saved Plan" : "Active Implementation Plan";
+  showPlanModePlan(pi, ctx, title, plan);
+}
+function showPlanModePlan(pi, ctx, title, plan) {
+  try {
+    pi.sendMessage(
+      {
+        customType: PLAN_MESSAGE_TYPE,
+        content: planMessageMarkdown(title, plan),
+        display: true,
+        details: { version: PLAN_MESSAGE_VERSION, title, plan }
+      },
+      { triggerTurn: false }
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    ctx.ui.notify(`Unable to show completed plan: ${detail}`, "error");
+  }
+}
+function planMessageMarkdown(title, plan) {
+  return `**${title}**
+
+${plan}`;
+}
+function planMessageParts(message) {
+  const details = message.details;
+  if (isRecord2(details) && details.version === PLAN_MESSAGE_VERSION && typeof details.title === "string" && typeof details.plan === "string") {
+    return { version: PLAN_MESSAGE_VERSION, title: details.title, plan: details.plan };
+  }
+  const text = typeof message.content === "string" ? message.content : message.content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+  const match = /^\*\*(?<title>[^*\n]+)\*\*\n+(?<plan>[\s\S]*)$/u.exec(text.trim());
+  if (match?.groups) {
+    return { version: PLAN_MESSAGE_VERSION, title: match.groups.title.trim(), plan: match.groups.plan.trim() };
+  }
+  return { version: PLAN_MESSAGE_VERSION, title: "Plan", plan: text.trim() };
+}
+function renderPlanMessage(message, options, theme) {
+  const { title, plan } = planMessageParts(message);
+  if (options.expanded) {
+    return new Markdown2(planMessageMarkdown(title, plan), options.outputPad, 0, getMarkdownTheme2());
+  }
+  const heading = planTitle(plan);
+  const line = `${theme.bold(title)}${heading === "plan" ? "" : `${theme.fg("muted", " \xB7 ")}${heading}`}`;
+  return { render: () => [line], invalidate() {
+  } };
+}
+function planModeStatusText(state, toolSummary) {
+  if (state.enabled) {
+    if (state.latestPlan) {
+      return `Plan mode is active and a proposed plan is ready. ${toolSummary()}`;
+    }
+    return `Plan mode is active. ${toolSummary()} Explore, ask, and finish with plan_mode_complete when decision-ready.`;
+  }
+  if (state.savedPlan) return "A plan is saved for later.";
+  if (state.activeImplementation) return "An implementation plan is active.";
+  return "Plan mode is off.";
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function publishPlanModeWidget(ctx, lines) {
+  if (!lines) {
+    ctx.ui.setWidget(PLAN_WIDGET_KEY, void 0);
+    return;
+  }
+  if (ctx.mode !== "tui") {
+    ctx.ui.setWidget(PLAN_WIDGET_KEY, [...lines]);
+    return;
+  }
+  const snapshot = [...lines];
+  ctx.ui.setWidget(PLAN_WIDGET_KEY, (_tui, theme) => ({
+    render: (width) => renderPlanModeWidget(snapshot, theme, width),
+    invalidate: () => {
+    }
+  }));
+}
+function formatStatus(state, ctx) {
+  let text;
+  if (state.enabled) {
+    text = state.awaitingAction || state.latestPlan ? "plan ready" : "plan active";
+  } else if (state.savedPlan) {
+    text = "plan saved";
+  } else if (state.activeImplementation) {
+    text = "plan implementing";
+  }
+  if (!text) return void 0;
+  return ctx.ui.theme.fg("accent", text);
+}
+
 // src/message-transform.ts
 var PLAN_CONTEXT_MESSAGE_TYPE = "plan-mode-context";
 var PLAN_IMPLEMENTATION_CONTEXT_MESSAGE_TYPE = "plan-mode-implementation-context";
-var PROPOSED_PLAN_MESSAGE_TYPE = "proposed-plan";
 var PLAN_IMPLEMENTATION_HANDOFF_PREFIX = "Plan mode is now disabled. Full tool access is restored. Implement this proposed plan now:";
 var PLAN_HISTORY_IMPLEMENTATION_PROMPT = "Implement the plan.";
 var PROPOSED_PLAN_PATTERN = /^<proposed_plan>[\t ]*\r?\n([\s\S]*?)\r?\n<\/proposed_plan>[\t ]*$/gm;
@@ -186,7 +327,7 @@ ${activeImplementation.plan}`;
 }
 function messageContainsInactivePlanModeArtifact(message) {
   const candidate = unwrapSessionMessage(message);
-  return candidate.customType === PROPOSED_PLAN_MESSAGE_TYPE || candidate.role === "toolResult" && candidate.toolName === PLAN_MODE_COMPLETE_TOOL_NAME;
+  return candidate.customType === PLAN_MESSAGE_TYPE || candidate.role === "toolResult" && candidate.toolName === PLAN_MODE_COMPLETE_TOOL_NAME;
 }
 function findHistoryImplementationArtifact(messages) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -216,7 +357,7 @@ function findHistoryImplementationArtifactBeforeKickoff(messages, kickoffIndex) 
       }
       continue;
     }
-    if (candidate.customType === PROPOSED_PLAN_MESSAGE_TYPE) {
+    if (candidate.customType === PLAN_MESSAGE_TYPE) {
       return { messageIndex: index, kind: "presentation" };
     }
     if (candidate.role === "assistant" && contentText(candidate.content).match(PROPOSED_PLAN_BLOCK_PATTERN)) {
@@ -967,7 +1108,7 @@ var PLAN_MODE_QUESTION_PARAMS = {
   }
 };
 function normalizePlanModeQuestionParams(input) {
-  if (!isRecord2(input) || !Array.isArray(input.questions)) {
+  if (!isRecord3(input) || !Array.isArray(input.questions)) {
     return { ok: false, error: "questions must be an array" };
   }
   if (input.questions.length < 1 || input.questions.length > 3) {
@@ -975,7 +1116,7 @@ function normalizePlanModeQuestionParams(input) {
   }
   const questions = [];
   for (const [questionIndex, rawQuestion] of input.questions.entries()) {
-    if (!isRecord2(rawQuestion)) {
+    if (!isRecord3(rawQuestion)) {
       return { ok: false, error: `question ${questionIndex + 1} must be an object` };
     }
     const id = stringField(rawQuestion.id);
@@ -995,7 +1136,7 @@ function normalizePlanModeQuestionParams(input) {
     }
     const options = [];
     for (const [optionIndex, rawOption] of rawQuestion.options.entries()) {
-      if (!isRecord2(rawOption)) {
+      if (!isRecord3(rawOption)) {
         return {
           ok: false,
           error: `question ${questionIndex + 1} option ${optionIndex + 1} must be an object`
@@ -1141,8 +1282,8 @@ function renderPlanModeQuestionCall(args) {
   return textLines([planModeQuestionCallSummary(args)]);
 }
 function planModeQuestionCallSummary(args) {
-  const questions = isRecord2(args) && Array.isArray(args.questions) ? args.questions : [];
-  const headers = questions.map((question) => isRecord2(question) ? stringField(question.header) : void 0).filter((header) => Boolean(header));
+  const questions = isRecord3(args) && Array.isArray(args.questions) ? args.questions : [];
+  const headers = questions.map((question) => isRecord3(question) ? stringField(question.header) : void 0).filter((header) => Boolean(header));
   return headers.length > 0 ? `plan question \xB7 ${headers.join(", ")}` : "plan question";
 }
 function renderPlanModeQuestion(result, options) {
@@ -1187,9 +1328,9 @@ function fallbackText(result) {
   return result.content.filter((block) => block.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n").trim();
 }
 function isPlanModeQuestionDetails(value) {
-  return isRecord2(value) && typeof value.cancelled === "boolean" && Array.isArray(value.questions);
+  return isRecord3(value) && typeof value.cancelled === "boolean" && Array.isArray(value.questions);
 }
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null;
 }
 function stringField(value) {
@@ -2049,6 +2190,12 @@ export {
   planModeCompleted,
   renderPlanModeCompletionCall,
   renderPlanModeCompletion,
+  PLAN_MESSAGE_TYPE,
+  updatePlanModeUi,
+  clearPlanModeUi,
+  showStoredPlan,
+  renderPlanMessage,
+  planModeStatusText,
   PLAN_HISTORY_IMPLEMENTATION_PROMPT,
   parseProposedPlan,
   invalidPlanMessage,
@@ -2095,4 +2242,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-5AJTGVGI.ts.map
+//# sourceMappingURL=chunk-PLQPDFJY.ts.map
