@@ -171,6 +171,9 @@ Press `n` again on an answered item to edit or clear its note.
 Revisit a question to replace its answer; changing the chosen option clears its prior note.
 Review lists every answer and note, blocks incomplete submission, and requires returning to a question to edit its answer or note.
 Custom answers and notes retain their raw submitted text in the tool result, while terminal rendering is sanitized.
+In TUI mode, a custom editor registered through Pi's `ctx.ui.setEditorComponent()` also handles answer and note editing in a separate instance, without changing the main prompt draft.
+While that editor is active, it controls Escape and submission keys; Ctrl+C still cancels the question.
+Without a custom editor, existing editing and cancellation behavior is unchanged.
 The TUI rejects either field above 4,000 characters instead of truncating it.
 RPC keeps the existing sequential `select` and `editor` dialogs because Pi RPC cannot render custom TUI components.
 If you cancel or no interactive UI is available, the agent should ask a concise plain-text question or proceed only with a clearly stated low-risk assumption instead of prematurely producing a final plan.
