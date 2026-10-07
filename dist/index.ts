@@ -90,7 +90,7 @@ function completePlanArguments(argumentPrefix) {
 
 // src/decline-contract.ts
 var DECLINE_CONTRACT_MESSAGE_TYPE = "plan-mode-decline";
-var DECLINE_GATE_ERROR = "plan_mode_complete is blocked: the user declined the last proposed plan. Restate what changed and what is still open, then call the plan_mode_question tool now with the next open question and get it answered (or wait for the user to run /plan finalize) before proposing again. Do not ask in assistant text: a plain-text question or reply does not unblock plan_mode_complete. Do not re-submit the plan unchanged.";
+var DECLINE_GATE_ERROR = "plan_mode_complete is blocked: the user declined the last proposed plan. Restate what changed and what is still open, then call the plan_mode_question tool now with the next open question and get it answered (or wait for the user to run /plan finalize) before proposing again. Do not ask in assistant text: a plain-text question or reply does not unblock plan_mode_complete. Do not re-submit the plan unchanged. If plan_mode_question returned ui_unavailable, tell the user to run /plan finalize instead of asking again.";
 function buildDeclineContract(declinedPlans, gated) {
   const gate = gated ? "plan_mode_complete returns an error until a plan_mode_question has been answered or the user runs /plan finalize." : "plan_mode_complete is available again.";
   const header = `[PI PLAN MODE: PLAN DECLINED x${declinedPlans}]`;
@@ -99,7 +99,7 @@ function buildDeclineContract(declinedPlans, gated) {
 The user declined the last proposed plan (dismissed it, or replied instead of approving). Before proposing again:
 - Restate what changed and what is still open.
 - Re-verify, with non-mutating exploration, the facts the user's feedback touched.
-- Call the plan_mode_question tool at least once. Never ask in assistant text; plain-text questions do not count and do not lift the gate.
+- Call the plan_mode_question tool at least once. Never ask in assistant text; plain-text questions do not count and do not lift the gate. If plan_mode_question returned ui_unavailable, plain text is allowed once and then tell the user to run /plan finalize, since only an answered question or /plan finalize reopens plan_mode_complete.
 ${gate} A message that only asks for clarification is not approval: answer it, do not re-submit the unchanged plan.`;
   }
   return `${header}
@@ -107,6 +107,7 @@ The user has declined ${declinedPlans} proposals in this workflow. Before propos
 - List every thread the user raised since the last proposal as resolved or open.
 - Call the plan_mode_question tool to ask "anything else before I re-propose?" with options like "Re-propose now" / "Not yet". Never ask in assistant text; plain-text questions do not count and do not lift the gate.
 - Re-propose only after an explicit go-ahead from the user.
+If plan_mode_question returned ui_unavailable, plain text is allowed once and then tell the user to run /plan finalize, since only an answered question or /plan finalize reopens plan_mode_complete.
 ${gate}`;
 }
 function createDeclineContractMessage(declinedPlans, gated, timestamp = 0) {
@@ -205,7 +206,7 @@ You are in Plan Mode, a Codex-like collaboration mode for producing a decision-c
 - Treat plan_mode_question and plan_mode_complete as callable when they are listed in the current request's active tools. Do not infer that they are unavailable from earlier modes or conversation history.
 - If a Plan tool call returns an actual error, respond to that error. Do not replace an available structured tool call with prose claiming that the tool is unavailable.
 - NEVER ask the user a question in assistant text. Every question goes through the plan_mode_question tool, including follow-ups and "anything else?" checks. A plain-text question does not count as asking and does not lift the decline gate.
-- If plan_mode_question returns cancelled, do not jump straight to a final plan when the missing answer is high impact. Call plan_mode_question again, or proceed only with a clearly stated low-risk assumption. Only after a plan_mode_question call has actually returned ui_unavailable may you ask one concise plain-text question.
+- If plan_mode_question returns cancelled, do not jump straight to a final plan when the missing answer is high impact. Call plan_mode_question again at most once, with a narrower or different question, or proceed only with a clearly stated low-risk assumption. Only after a plan_mode_question call has actually returned ui_unavailable may you ask one concise plain-text question, and after a decline tell the user to run /plan finalize.
 
 ## Ending each turn
 
