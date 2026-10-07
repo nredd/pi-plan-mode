@@ -1,5 +1,11 @@
 # @narumitw/pi-plan-mode
 
+## 0.59.2
+
+### Patch Changes
+
+- 2708319: Require Pi TUI Kit's published questionnaire custom-editor fix so existing lockfiles cannot retain a Kit release that bypasses the configured editor factory or mishandles editor submissions and key-release cycles.
+
 ## 0.59.1
 
 ### Patch Changes
