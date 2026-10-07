@@ -2,7 +2,7 @@
 
 [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT), rebased as a small patch queue on upstream `@narumitw/pi-plan-mode@0.58.3` and installed pinned, e.g. `pi install git:github.com/nredd/pi-plan-mode@v0.58.3-nredd.6`. Install a `v*-nredd.N` tag, not the default branch: `main` is the retired 0.58.0 fork. `dist/` is committed because pi loads it straight from the git checkout.
+Personal fork of [`@narumitw/pi-plan-mode`](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-plan-mode) (MIT), rebased as a small patch queue on upstream `@narumitw/pi-plan-mode@0.58.3` and installed pinned, e.g. `pi install git:github.com/nredd/pi-plan-mode@v0.58.3-nredd.7`. Install a `v*-nredd.N` tag, not the default branch: `main` is the retired 0.58.0 fork. `dist/` is committed because pi loads it straight from the git checkout.
 
 Differences from upstream. The presentational ones come first; the ready-plan flow, decline gate, and bash policy changes follow:
 
@@ -47,13 +47,13 @@ This release requires Pi 0.80.6 or newer.
 Native PowerShell tool support requires Pi 0.84.3 or newer on Windows; earlier Pi versions omit that optional tool and retain the existing Plan policy.
 
 ```bash
-pi install git:github.com/nredd/pi-plan-mode@v0.58.3-nredd.6
+pi install git:github.com/nredd/pi-plan-mode@v0.58.3-nredd.7
 ```
 
 Try without installing permanently:
 
 ```bash
-pi -e git:github.com/nredd/pi-plan-mode@v0.58.3-nredd.6
+pi -e git:github.com/nredd/pi-plan-mode@v0.58.3-nredd.7
 ```
 
 Build and try this package locally from the repository root:
@@ -191,7 +191,7 @@ Review lists every answer and note, blocks incomplete submission, and requires r
 Custom answers and notes retain their raw submitted text in the tool result, while terminal rendering is sanitized.
 The TUI rejects either field above 4,000 characters instead of truncating it.
 RPC keeps the existing sequential `select` and `editor` dialogs because Pi RPC cannot render custom TUI components.
-If you cancel or no interactive UI is available, the agent should ask a concise plain-text question or proceed only with a clearly stated low-risk assumption instead of prematurely producing a final plan.
+If you cancel, the agent should call `plan_mode_question` again or proceed only with a clearly stated low-risk assumption. The agent must never ask questions in assistant text; plain text is allowed only after `plan_mode_question` actually returned `ui_unavailable`. Plain-text questions do not lift the decline gate.
 
 Pi identifies tools by tool name.
 The pre-start selector stores accepted session policy names and shows each effective tool's source from Pi metadata, such as `built-in`, a user extension path, or a project extension path.
