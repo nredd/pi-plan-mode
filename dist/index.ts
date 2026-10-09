@@ -10,6 +10,7 @@ import {
   PLAN_MODE_QUESTION_PARAMS,
   PLAN_MODE_QUESTION_TOOL_NAME,
   PLAN_MODE_THINKING_LEVELS,
+  SSH_EXEC_TOOL_NAME,
   answerPlanModeQuestions,
   awaitPlanModeSettingsWrites,
   canSelectToolInPlanMode,
@@ -28,6 +29,7 @@ import {
   findAvailableImplementationModel,
   findBlockedCommandSegment,
   findBlockedPowerShellCommandSegment,
+  findBlockedSshExecCall,
   implementationRetentionPreview,
   invalidPlanMessage,
   isPendingImplementationModelIdentifier,
@@ -57,7 +59,7 @@ import {
   snapshotPlanModeSelectedNames,
   updatePlanModeSettings,
   updatePlanModeUi
-} from "./chunks/chunk-LHAYX5RF.ts";
+} from "./chunks/chunk-OTNMYDEZ.ts";
 
 // src/plan-mode.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
@@ -1041,7 +1043,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-WEWKIIL7.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-4YEBIH45.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1541,6 +1543,16 @@ function planMode(pi, dependencies = {}) {
           block: true,
           reason: `Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.
 Blocked command: ${blocked}`
+        };
+      }
+    }
+    if (event.toolName === SSH_EXEC_TOOL_NAME) {
+      const blocked = findBlockedSshExecCall(event.input, settings.safeSubcommands);
+      if (blocked !== void 0) {
+        return {
+          block: true,
+          reason: `Plan mode blocks ssh_exec calls outside its reviewed remote inspection policy.
+Blocked: ${blocked}`
         };
       }
     }
