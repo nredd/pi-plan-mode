@@ -225,7 +225,11 @@ function formatStatus(state, ctx) {
   }
   if (!text) return void 0;
   if (!ctx.hasUI) return text;
-  return ctx.ui.theme.fg("accent", text);
+  try {
+    return ctx.ui.theme.fg("accent", text);
+  } catch {
+    return text;
+  }
 }
 
 // src/message-transform.ts
@@ -1470,6 +1474,7 @@ function isBuiltinTool(tool) {
 function isAnnotatedReadOnlyTool(tool) {
   const source = tool.sourceInfo;
   if (!source?.source || source.source === "builtin" || source.path?.startsWith("builtin:")) return false;
+  if (source.scope === "project") return false;
   return tool.annotations?.readOnlyHint === true;
 }
 function classifyPlanModeTool(tool) {
@@ -1488,16 +1493,25 @@ function readCommand(input) {
   return typeof command?.command === "string" ? command.command : "";
 }
 var SSH_EXEC_TOOL_NAME = "ssh_exec";
+var SSH_EXEC_ALLOWED_KEYS = /* @__PURE__ */ new Set(["host", "command", "cwd", "timeout"]);
 function findBlockedSshExecCall(input, safeSubcommands = {}, platform = process.platform) {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return "input is not an object";
+  const unknownKey = Object.keys(input).find((key) => !SSH_EXEC_ALLOWED_KEYS.has(key));
+  if (unknownKey !== void 0) return `parameter '${unknownKey}' is not allowed in Plan mode`;
   const call = input;
-  const host = typeof call?.host === "string" ? call.host.trim() : "";
+  const host = typeof call.host === "string" ? call.host.trim() : "";
   if (!host) return "host is required";
   if (!(safeSubcommands.ssh ?? []).some((prefix) => prefix.trim() === host)) {
     return `host '${host}' is not a configured ssh prefix`;
   }
-  const command = readCommand(input);
-  const blocked = findBlockedCommandSegment(command, safeSubcommands, void 0, platform, [], true);
+  if (call.cwd !== void 0 && (typeof call.cwd !== "string" || hasShellExpansion(call.cwd) || /[\s;&|<>]/.test(call.cwd))) {
+    return "cwd must be a plain path";
+  }
+  const blocked = findBlockedRemoteCommand(readCommand(input), safeSubcommands, platform);
   return blocked === void 0 ? void 0 : `remote command: ${blocked}`;
+}
+function findBlockedRemoteCommand(command, safeSubcommands, platform) {
+  return findBlockedCommandSegment(command, safeSubcommands, void 0, platform, [], true);
 }
 function findBlockedCommandSegment(command, safeSubcommands = {}, workingDirectory, platform = process.platform, trustedDirectories = [], remote = false) {
   const segments = splitShellSegments(command);
@@ -1788,7 +1802,7 @@ function isSafeSshSegment(segment, prefix, safeSubcommands, platform) {
   const remainder = segment.trimStart().slice(prefix.length);
   const words = shellWords(remainder);
   if (!words || words.length === 0 || words[0]?.startsWith("-")) return false;
-  return findBlockedCommandSegment(words.join(" "), safeSubcommands, void 0, platform, [], true) === void 0;
+  return findBlockedRemoteCommand(words.join(" "), safeSubcommands, platform) === void 0;
 }
 var CURL_FORBIDDEN_LONG = [
   "--output",
@@ -2334,4 +2348,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-OTNMYDEZ.ts.map
+//# sourceMappingURL=chunk-CG3OEZDT.ts.map
