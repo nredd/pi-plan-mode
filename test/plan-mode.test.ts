@@ -1291,6 +1291,32 @@ test("a newer Plan turn cancels stale ready presentation", async () => {
   assert.equal(context.statuses.get("plan-mode"), "plan active");
 });
 
+test("an extension-triggered run keeps a ready plan waiting", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi);
+  const context = createMockContext({ hasUI: false });
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  const execute = mock.tools.find((candidate) => candidate.name === "plan_mode_complete")?.execute as
+    | ((...args: unknown[]) => Promise<unknown>)
+    | undefined;
+  assert.ok(execute);
+  await execute("complete", { plan: "# Waiting" }, undefined, undefined, context.ctx);
+  assert.equal(context.statuses.get("plan-mode"), "plan ready");
+
+  // Pi 1.2: a subagent notice that wakes the session fires before_agent_start with messageType "custom".
+  await mock.events.get("before_agent_start")?.[0]?.(
+    { messageType: "custom", message: { customType: "subagent-notice" }, systemPrompt: "base" },
+    context.ctx,
+  );
+  assert.equal(context.statuses.get("plan-mode"), "plan ready");
+
+  await mock.events.get("before_agent_start")?.[0]?.(
+    { messageType: "user", prompt: "p", systemPrompt: "base" },
+    context.ctx,
+  );
+  assert.equal(context.statuses.get("plan-mode"), "plan active");
+});
+
 test("plan_mode_complete rejects inactive and invalid submissions", async () => {
   const mock = createMockPi({ activeTools: ["read"] });
   planMode(mock.pi);

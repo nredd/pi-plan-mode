@@ -526,7 +526,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     planApprovals.announceLatest(ctx);
     // A new session receives its setup entries after session_start, so its input gate refreshes
     // them. Resumed and forked sessions already have the intent and must apply it here because
-    // extension-triggered custom-message turns bypass both input and before_agent_start.
+    // extension-triggered custom-message turns bypass `input`, and before pi 1.2 `before_agent_start` too.
     if (event.reason !== "new") await applyPendingImplementationRuntime(ctx);
   });
 
@@ -820,12 +820,16 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     }
   });
 
-  pi.on("before_agent_start", (_event, ctx) => {
+  pi.on("before_agent_start", (event, ctx) => {
     refreshStateForFirstPrompt(ctx);
     // A fresh implementation session's approval entry arrives with its setup, after
     // session_start; announce it before the first model request.
     planApprovals.announceLatest(ctx);
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
+    // Pi 1.2 also fires this for extension-triggered runs (`sendMessage` with `triggerTurn`),
+    // e.g. a subagent notice waking an idle session. Those are not a newer Plan turn, so they
+    // must not discard a plan that is waiting on the user. Older hosts omit `messageType`.
+    if ((event as { messageType?: "user" | "custom" }).messageType === "custom") return;
     if (state.latestPlan || state.awaitingAction) {
       readyPresentationIntent = undefined;
       state = {
