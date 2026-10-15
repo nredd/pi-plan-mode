@@ -1622,10 +1622,11 @@ Blocked command: ${blocked}`
       });
     }
   });
-  pi.on("before_agent_start", (_event, ctx) => {
+  pi.on("before_agent_start", (event, ctx) => {
     refreshStateForFirstPrompt(ctx);
     planApprovals.announceLatest(ctx);
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
+    if (event.messageType === "custom") return;
     if (state.latestPlan || state.awaitingAction) {
       readyPresentationIntent = void 0;
       state = {
