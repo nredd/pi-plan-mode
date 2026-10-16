@@ -33,6 +33,7 @@ import {
   implementationRetentionPreview,
   invalidPlanMessage,
   isPendingImplementationModelIdentifier,
+  isReproposalConfirmed,
   latestAssistantStopReason,
   latestAssistantText,
   messageTextContent,
@@ -59,7 +60,7 @@ import {
   snapshotPlanModeSelectedNames,
   updatePlanModeSettings,
   updatePlanModeUi
-} from "./chunks/chunk-CG3OEZDT.ts";
+} from "./chunks/chunk-WIDWMEV5.ts";
 
 // src/plan-mode.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
@@ -94,33 +95,39 @@ function completePlanArguments(argumentPrefix) {
 
 // src/decline-contract.ts
 var DECLINE_CONTRACT_MESSAGE_TYPE = "plan-mode-decline";
-var DECLINE_GATE_ERROR = "plan_mode_complete is blocked: the user declined the last proposed plan. Restate what changed and what is still open, then call the plan_mode_question tool now with the next open question and get it answered (or wait for the user to run /plan finalize) before proposing again. Do not ask in assistant text: a plain-text question or reply does not unblock plan_mode_complete. Do not re-submit the plan unchanged. If plan_mode_question returned ui_unavailable, tell the user to run /plan finalize instead of asking again.";
-function buildDeclineContract(declinedPlans, gated) {
-  const gate = gated ? "plan_mode_complete returns an error until a plan_mode_question has been answered or the user runs /plan finalize." : "plan_mode_complete is available again.";
+var DECLINE_GATE_ERROR = "plan_mode_complete is blocked: explicit permission to submit a proposal is required. Restate what changed and what is still open, then call plan_mode_question in reproposal_confirmation mode and receive the canonical Re-propose now choice (or wait for the user to run /plan finalize) before proposing again. Ordinary clarification, Not yet, cancellation, custom text, and plain-text replies do not unblock plan_mode_complete. If confirmation returns ui_unavailable, tell the user to run /plan finalize instead of repeating the tool or asking permission in text. If it is cancelled or Not yet, continue material planning or await user input; do not immediately repeat it. Do not re-submit the plan unchanged.";
+function buildDeclineContract(declinedPlans) {
+  const gate = "plan_mode_complete returns an error until plan_mode_question in reproposal_confirmation mode returns its canonical Re-propose now option or the user runs /plan finalize.";
+  if (declinedPlans === 0) {
+    return `[PI PLAN MODE: PROPOSAL PERMISSION REQUIRED]
+An explicit proposal confirmation was requested. Not yet, cancellation, ordinary clarification, and custom text do not grant permission. Continue material planning or await user input; do not immediately repeat the confirmation. When ready, use plan_mode_question with mode "reproposal_confirmation". If UI is unavailable, ask the user to run /plan finalize.
+${gate}`;
+  }
   const header = `[PI PLAN MODE: PLAN DECLINED x${declinedPlans}]`;
   if (declinedPlans <= 1) {
     return `${header}
 The user declined the last proposed plan (dismissed it, or replied instead of approving). Before proposing again:
 - Restate what changed and what is still open.
 - Re-verify, with non-mutating exploration, the facts the user's feedback touched.
-- Call the plan_mode_question tool at least once. Never ask in assistant text; plain-text questions do not count and do not lift the gate. If plan_mode_question returned ui_unavailable, plain text is allowed once and then tell the user to run /plan finalize, since only an answered question or /plan finalize reopens plan_mode_complete.
+- When ready to submit a replacement, call plan_mode_question with mode "reproposal_confirmation". Its fixed prompt asks permission to submit the revised plan for review, not to implement it; its UI has canonical choices Re-propose now and Not yet. Only Re-propose now is permission. Never infer permission from label text, clarification, custom text, cancellation, or assistant prose.
+- If confirmation returns ui_unavailable, tell the user to run /plan finalize instead of repeating the tool or asking permission in text. If it is cancelled or Not yet, continue material planning or await user input; do not immediately repeat it.
 ${gate} A message that only asks for clarification is not approval: answer it, do not re-submit the unchanged plan.`;
   }
   return `${header}
 The user has declined ${declinedPlans} proposals in this workflow. Before proposing again:
 - List every thread the user raised since the last proposal as resolved or open.
-- Call the plan_mode_question tool to ask "anything else before I re-propose?" with options like "Re-propose now" / "Not yet". Never ask in assistant text; plain-text questions do not count and do not lift the gate.
-- Re-propose only after an explicit go-ahead from the user.
-If plan_mode_question returned ui_unavailable, plain text is allowed once and then tell the user to run /plan finalize, since only an answered question or /plan finalize reopens plan_mode_complete.
+- When ready to submit a replacement, call plan_mode_question with mode "reproposal_confirmation". Its fixed prompt asks permission to submit the revised plan for review, not to implement it; its UI has canonical choices Re-propose now and Not yet. Only Re-propose now is permission. Never infer permission from label text, clarification, custom text, cancellation, or assistant prose.
+- If confirmation returns ui_unavailable, tell the user to run /plan finalize instead of repeating the tool or asking permission in text. If it is cancelled or Not yet, continue material planning or await user input; do not immediately repeat it.
+- Re-propose only after that explicit go-ahead.
 ${gate}`;
 }
-function createDeclineContractMessage(declinedPlans, gated, timestamp = 0) {
+function createDeclineContractMessage(declinedPlans, timestamp = 0) {
   return {
     role: "custom",
     customType: DECLINE_CONTRACT_MESSAGE_TYPE,
-    content: buildDeclineContract(declinedPlans, gated),
+    content: buildDeclineContract(declinedPlans),
     display: false,
-    details: { declinedPlans, gated },
+    details: { declinedPlans, reproposalReview: "required" },
     timestamp
   };
 }
@@ -388,7 +395,12 @@ function restorePlanModeState(entries, stateEntryType) {
     latestPlanSource: enabled ? (persistedPlan ? persistedSource : void 0) ?? (recoveredPlan ? PLAN_MODE_COMPLETE_TOOL_NAME : void 0) : void 0,
     awaitingAction: enabled && latestPlan !== void 0,
     declinedPlans: enabled ? nonNegativeInteger(entry.data.declinedPlans) : 0,
-    declineGated: enabled && entry.data.declineGated === true,
+    reproposalReview: enabled ? restoreReproposalReview(
+      entry.data.reproposalReview,
+      entry.data.declineGated,
+      entry.data.declinedPlans,
+      latestPlan
+    ) : void 0,
     planDeclined: enabled && latestPlan !== void 0 && entry.data.planDeclined === true,
     savedPlan,
     activeImplementation,
@@ -400,6 +412,11 @@ function restorePlanModeState(entries, stateEntryType) {
     appliedThinkingLevel: enabled ? fixedThinkingLevel(entry.data.appliedThinkingLevel) : void 0,
     manualThinkingLevel: enabled ? fixedThinkingLevel(entry.data.manualThinkingLevel) : void 0
   };
+}
+function restoreReproposalReview(value, legacyGate, declinedPlans, latestPlan) {
+  if (value === "required" || value === "confirmed") return value;
+  if (legacyGate === true || nonNegativeInteger(declinedPlans) > 0 && latestPlan === void 0) return "required";
+  return void 0;
 }
 function normalizeWorkflowToolPolicy(value) {
   if (value === void 0) return void 0;
@@ -1035,7 +1052,7 @@ var STATE_ENTRY_TYPE = "plan-mode-state";
 var RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE = "plan-mode-recovered-input";
 var BLOCKED_MUTATING_TOOLS = /* @__PURE__ */ new Set(["edit", "write", "update_plan"]);
 var DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
-var DECLINE_RESET = { declinedPlans: 0, declineGated: false, planDeclined: false };
+var DECLINE_RESET = { declinedPlans: 0, reproposalReview: void 0, planDeclined: false };
 function planMode(pi, dependencies = {}) {
   const workflowMutex = new WorkflowMutex(pi);
   let workflowOwner;
@@ -1045,7 +1062,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-6SIP6VKS.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-U4E4Q2VB.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1137,21 +1154,31 @@ function planMode(pi, dependencies = {}) {
         return planModeQuestionCancelled([], "invalid_input", `Error: ${parsed.error}`);
       }
       finalizationRequest.satisfy();
+      if (parsed.mode) {
+        state = { ...state, reproposalReview: "required" };
+        persistState();
+      }
       if (!ctx.hasUI) {
         return planModeQuestionCancelled(
           parsed.questions,
           "ui_unavailable",
-          "Unable to ask Plan-mode questions because interactive UI is not available."
+          "Unable to ask Plan-mode questions because interactive UI is not available.",
+          parsed.mode
         );
       }
       const sessionGeneration = menuGeneration;
       const questionWorkflowGeneration = workflowGeneration;
       const questionOwner = workflowOwner;
-      const result = await answerPlanModeQuestions(parsed.questions, ctx, {
-        isCurrent: () => sessionGeneration === menuGeneration && questionWorkflowGeneration === workflowGeneration && workflowMutex.isOwner(questionOwner),
-        isEnabled: () => state.enabled
-      });
-      if (!result.details.cancelled) liftDeclineGate();
+      const result = await answerPlanModeQuestions(
+        parsed.questions,
+        ctx,
+        {
+          isCurrent: () => sessionGeneration === menuGeneration && questionWorkflowGeneration === workflowGeneration && workflowMutex.isOwner(questionOwner),
+          isEnabled: () => state.enabled
+        },
+        parsed.mode
+      );
+      if (isReproposalConfirmed(result)) confirmReproposal();
       return result;
     }
   });
@@ -1166,7 +1193,7 @@ function planMode(pi, dependencies = {}) {
       if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) {
         throw new Error("plan_mode_complete is only available while Plan mode is active");
       }
-      if (state.declineGated) throw new Error(DECLINE_GATE_ERROR);
+      if (state.reproposalReview === "required") throw new Error(DECLINE_GATE_ERROR);
       const parsed = normalizePlanModeCompletion(params);
       if (!parsed.ok) throw new Error(parsed.error);
       acceptCompletedPlan(parsed.plan, PLAN_MODE_COMPLETE_TOOL_NAME, ctx);
@@ -1587,7 +1614,7 @@ Blocked command: ${blocked}`
     }
     const messages = state.enabled || modeContractsRelevant ? reconcileModeContract(result.messages, state.enabled ? "plan" : "normal") : result.messages;
     const declined = state.enabled ? state.declinedPlans ?? 0 : 0;
-    const withDecline = declined > 0 ? [...messages, createDeclineContractMessage(declined, state.declineGated === true, Date.now())] : messages;
+    const withDecline = state.enabled && state.reproposalReview === "required" ? [...messages, createDeclineContractMessage(declined, Date.now())] : messages;
     return { messages: withDecline };
   });
   pi.on("input", async (event, ctx) => {
@@ -1657,7 +1684,7 @@ Blocked command: ${blocked}`
       updateUi(ctx);
       return;
     }
-    if (state.declineGated) {
+    if (state.reproposalReview === "required") {
       ctx.ui.notify(`Proposed plan ignored. ${DECLINE_GATE_ERROR}`, "warning");
       persistState();
       updateUi(ctx);
@@ -1832,6 +1859,7 @@ Blocked command: ${blocked}`
       latestPlan: normalized.plan,
       latestPlanSource: source,
       awaitingAction: true,
+      reproposalReview: void 0,
       planDeclined: false
     };
     readyPresentationIntent = {
@@ -1868,22 +1896,27 @@ Blocked command: ${blocked}`
       return;
     }
     finalizationRequest.request(workflowGeneration);
-    liftDeclineGate();
+    confirmReproposal();
     if (!sendPlanModeUserMessage(FINALIZE_PLAN_PROMPT, ctx)) finalizationRequest.reset();
   }
   function recordPlanDecline() {
     if (!state.enabled || !state.awaitingAction || !state.latestPlan) return;
     if (state.planDeclined) {
-      if (state.declineGated) return;
-      state = { ...state, declineGated: true };
+      if (state.reproposalReview === "required") return;
+      state = { ...state, reproposalReview: "required" };
     } else {
-      state = { ...state, declinedPlans: (state.declinedPlans ?? 0) + 1, declineGated: true, planDeclined: true };
+      state = {
+        ...state,
+        declinedPlans: (state.declinedPlans ?? 0) + 1,
+        reproposalReview: "required",
+        planDeclined: true
+      };
     }
     persistState();
   }
-  function liftDeclineGate() {
-    if (!state.enabled || !state.declineGated) return;
-    state = { ...state, declineGated: false };
+  function confirmReproposal() {
+    if (!state.enabled || state.reproposalReview !== "required") return;
+    state = { ...state, reproposalReview: "confirmed" };
     persistState();
   }
   function savePlanForLater(ctx) {

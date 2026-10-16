@@ -1065,11 +1065,22 @@ function isNodeError2(error) {
 // src/question-tool.ts
 var PLAN_MODE_QUESTION_TOOL_NAME = "plan_mode_question";
 var MAX_PLAN_MODE_RESPONSE_LENGTH = 4e3;
+var REPROPOSAL_CONFIRMATION_MODE = "reproposal_confirmation";
+var REPROPOSAL_CONFIRMATION_OPTIONS = [
+  { label: "Re-propose now", description: "Submit the revised plan for review." },
+  { label: "Not yet", description: "Keep planning before another proposal." }
+];
+var REPROPOSAL_CONFIRMATION_QUESTION = "May I submit the revised plan for your review? This does not start implementation.";
 var PLAN_MODE_QUESTION_PARAMS = {
   type: "object",
   additionalProperties: false,
   required: ["questions"],
   properties: {
+    mode: {
+      type: "string",
+      enum: [REPROPOSAL_CONFIRMATION_MODE],
+      description: "Use reproposal_confirmation only to ask permission to submit a replacement plan after a declined proposal."
+    },
     questions: {
       type: "array",
       minItems: 1,
@@ -1119,6 +1130,10 @@ function normalizePlanModeQuestionParams(input) {
   if (input.questions.length < 1 || input.questions.length > 3) {
     return { ok: false, error: "questions must contain 1-3 items" };
   }
+  const mode = input.mode === void 0 ? void 0 : input.mode === REPROPOSAL_CONFIRMATION_MODE ? REPROPOSAL_CONFIRMATION_MODE : void 0;
+  if (input.mode !== void 0 && !mode) {
+    return { ok: false, error: `mode must be ${REPROPOSAL_CONFIRMATION_MODE}` };
+  }
   const questions = [];
   for (const [questionIndex, rawQuestion] of input.questions.entries()) {
     if (!isRecord3(rawQuestion)) {
@@ -1165,28 +1180,42 @@ function normalizePlanModeQuestionParams(input) {
     }
     questions.push({ id, header, question, options });
   }
-  return { ok: true, questions };
+  if (mode) {
+    if (questions.length !== 1) {
+      return { ok: false, error: `${REPROPOSAL_CONFIRMATION_MODE} requires exactly one question` };
+    }
+    const question = questions[0];
+    if (!question) throw new Error("Validated question unexpectedly missing");
+    questions[0] = {
+      ...question,
+      question: REPROPOSAL_CONFIRMATION_QUESTION,
+      options: [...REPROPOSAL_CONFIRMATION_OPTIONS]
+    };
+  }
+  return { ok: true, questions, ...mode ? { mode } : {} };
 }
-async function answerPlanModeQuestions(questions, ctx, lifecycle) {
+async function answerPlanModeQuestions(questions, ctx, lifecycle, mode) {
   const answers = await askPlanModeQuestions(questions, ctx, () => lifecycle.isCurrent() && lifecycle.isEnabled());
   if (!lifecycle.isCurrent()) {
     return planModeQuestionCancelled(
       questions,
       "cancelled",
-      "Plan-mode question cancelled because the session changed."
+      "Plan-mode question cancelled because the session changed.",
+      mode
     );
   }
   if (!lifecycle.isEnabled()) {
     return planModeQuestionCancelled(
       questions,
       "plan_mode_inactive",
-      "Plan-mode question cancelled because Plan mode is no longer active."
+      "Plan-mode question cancelled because Plan mode is no longer active.",
+      mode
     );
   }
   if (!answers) {
-    return planModeQuestionCancelled(questions, "cancelled", "User cancelled the Plan-mode question prompt.");
+    return planModeQuestionCancelled(questions, "cancelled", "User cancelled the Plan-mode question prompt.", mode);
   }
-  return planModeQuestionAnswered(questions, answers);
+  return planModeQuestionAnswered(questions, answers, mode);
 }
 async function askPlanModeQuestions(questions, ctx, shouldContinue = () => true) {
   const { runQuestionnaire, sanitizeTerminalText } = await import("@narumitw/pi-tui-kit");
@@ -1259,21 +1288,25 @@ function answerFor(question, answer, options) {
   if (options.note !== void 0) result.note = options.note;
   return result;
 }
-function planModeQuestionAnswered(questions, answers) {
+function planModeQuestionAnswered(questions, answers, mode) {
   return {
-    content: [{ type: "text", text: formatPlanModeQuestionPayload({ cancelled: false, answers }) }],
-    details: { cancelled: false, questions, answers }
+    content: [{ type: "text", text: formatPlanModeQuestionPayload({ cancelled: false, answers, mode }) }],
+    details: { cancelled: false, questions, answers, ...mode ? { mode } : {} }
   };
 }
-function planModeQuestionCancelled(questions, reason, message) {
+function isReproposalConfirmed(result) {
+  const answer = result.details.answers?.[0];
+  return result.details.cancelled === false && result.details.mode === REPROPOSAL_CONFIRMATION_MODE && answer?.wasCustom === false && answer.optionIndex === 1;
+}
+function planModeQuestionCancelled(questions, reason, message, mode) {
   return {
     content: [
       {
         type: "text",
-        text: formatPlanModeQuestionPayload({ cancelled: true, reason, message })
+        text: formatPlanModeQuestionPayload({ cancelled: true, reason, message, mode })
       }
     ],
-    details: { cancelled: true, reason, questions }
+    details: { cancelled: true, reason, questions, ...mode ? { mode } : {} }
   };
 }
 function formatPlanModeQuestionPayload(payload) {
@@ -2331,6 +2364,7 @@ export {
   PLAN_MODE_QUESTION_PARAMS,
   normalizePlanModeQuestionParams,
   answerPlanModeQuestions,
+  isReproposalConfirmed,
   planModeQuestionCancelled,
   renderPlanModeQuestionCall,
   renderPlanModeQuestion,
@@ -2348,4 +2382,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-CG3OEZDT.ts.map
+//# sourceMappingURL=chunk-WIDWMEV5.ts.map
